@@ -99,6 +99,11 @@ qobuz-downloader URL --dir-template "{artist}/{year} {album}" --file-template "{
 | `--file-template` | `{tracknumber} - {title}` | filename pattern; must not contain path separators |
 | `--limit` | none | queue at most this many tracks per URL |
 | `--db` | `<dir>/.queue.sqlite3` | queue database location |
+| `--no-lyrics` | off | skip saving `.lrc` lyric files |
+
+## Lyrics
+
+By default every downloaded track also gets a synced **`.lrc`** sidecar file next to the audio — `01 - Rehab.flac` gets `01 - Rehab.lrc` — sourced from [LRCLIB](https://lrclib.net) (free, no account). Lyrics lookup never blocks a download: if no synced lyrics exist for a track, only the audio is saved. Use `--no-lyrics` to disable.
 
 ## Quality: what you get
 

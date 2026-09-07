@@ -14,6 +14,7 @@ from qobuz_downloader.domain import (
     UnmatchedTrack,
 )
 from qobuz_downloader.engine import Engine
+from qobuz_downloader.lyrics import LrcLib
 from qobuz_downloader.match import LiveSpotify, make_matcher
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.queue import Queue, SqliteQueue
@@ -69,6 +70,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="queue at most this many tracks per URL",
     )
+    parser.add_argument(
+        "--no-lyrics",
+        action="store_true",
+        help="do not save .lrc lyric files alongside tracks",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -100,7 +106,11 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(args.dir).expanduser()
     naming = Naming(args.dir_template, args.file_template, root=root)
-    engine = Engine(qobuz, naming)
+    engine = Engine(
+        qobuz,
+        naming,
+        lyrics=None if args.no_lyrics else LrcLib(),
+    )
     queue = SqliteQueue(Path(args.db) if args.db else root / ".queue.sqlite3")
     matcher = make_matcher(qobuz)
 

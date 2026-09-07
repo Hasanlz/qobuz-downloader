@@ -84,3 +84,6 @@ The persistent list of wanted Tracks and their download status (pending, complet
 **Naming template**:
 A user-defined pattern, with placeholders like artist, album, and title, that determines the names of downloaded files and the directories they live in.
 _Avoid_: format string, naming scheme
+
+**Lyrics file**:
+A sidecar .lrc file, timestamped line by line, saved next to the audio of a Track when lyrics are found for it.

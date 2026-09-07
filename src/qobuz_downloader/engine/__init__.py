@@ -7,6 +7,7 @@ from mutagen.flac import FLAC
 
 from qobuz_downloader.domain import Complete, Failed, Outcome, Quality, Stream, Track
 from qobuz_downloader.engine._source import ByteSource, HttpByteSource
+from qobuz_downloader.lyrics import LyricsSource
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.qobuz import Qobuz
 
@@ -25,11 +26,13 @@ class Engine:
         naming: Naming,
         source: ByteSource | None = None,
         retry_delays: Sequence[float] = (1.0, 2.0),
+        lyrics: LyricsSource | None = None,
     ) -> None:
         self._qobuz = qobuz
         self._naming = naming
         self._source: ByteSource = source or HttpByteSource()
         self._retry_delays = tuple(retry_delays)
+        self._lyrics = lyrics
 
     def download(self, track: Track, preferred: Quality) -> Outcome:
         rungs = [
@@ -56,6 +59,7 @@ class Engine:
                     fell_back=stream.quality < preferred,
                     sampling_rate=stream.sampling_rate,
                     bit_depth=stream.bit_depth,
+                    lyrics_saved=self._write_lyrics(track, path),
                 )
             except Exception as error:
                 last_error = str(error) or type(error).__name__
@@ -90,3 +94,15 @@ class Engine:
         except MutagenError as error:
             partial.unlink(missing_ok=True)
             raise ValueError(f"corrupt FLAC file: {error}") from error
+
+    def _write_lyrics(self, track: Track, path: Path) -> bool:
+        if self._lyrics is None:
+            return False
+        try:
+            text = self._lyrics.lrc(track)
+        except Exception:
+            return False
+        if not text:
+            return False
+        path.with_suffix(".lrc").write_text(text, encoding="utf-8")
+        return True

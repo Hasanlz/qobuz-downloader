@@ -3,6 +3,7 @@ import struct
 from qobuz_downloader.domain import Complete, Failed, Quality, Stream, Track
 from qobuz_downloader.engine import Engine
 from qobuz_downloader.engine._source import ByteResponse, ByteSource
+from qobuz_downloader.lyrics import LyricsSource
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.qobuz import Qobuz
 
@@ -85,9 +86,19 @@ class FakeByteSource(ByteSource):
         raise ConnectionError("connection reset")
 
 
-def make_engine(qobuz, source, tmp_path, retry_delays=()):
+class FakeLyrics(LyricsSource):
+    def __init__(self, text=None):
+        self.text = text
+        self.asked = []
+
+    def lrc(self, track):
+        self.asked.append(track.id)
+        return self.text
+
+
+def make_engine(qobuz, source, tmp_path, retry_delays=(), lyrics=None):
     naming = Naming("{artist}", "{tracknumber} - {title}", root=tmp_path)
-    return Engine(qobuz, naming, source=source, retry_delays=retry_delays), tmp_path
+    return Engine(qobuz, naming, source=source, retry_delays=retry_delays, lyrics=lyrics), tmp_path
 
 
 def test_happy_path_downloads_and_renames(tmp_path):
@@ -193,3 +204,47 @@ def test_partial_remains_for_next_run_on_final_network_failure(tmp_path):
 
     assert isinstance(outcome, Failed)
     assert (target / "Artist/01 - Song.flac.part").exists()
+
+
+def test_lyrics_sidecar_saved_next_to_flac(tmp_path):
+    qobuz = FakeQobuz([Quality.CD])
+    source = FakeByteSource(_flac_bytes(512))
+    lyrics = FakeLyrics("[00:01.24] They tried to make me go to rehab")
+    engine, target = make_engine(qobuz, source, tmp_path, lyrics=lyrics)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert outcome.lyrics_saved
+    sidecar = target / "Artist/01 - Song.lrc"
+    assert sidecar.read_text(encoding="utf-8").startswith("[00:01.24]")
+    assert lyrics.asked == ["t1"]
+
+
+def test_lyrics_failure_never_blocks_download(tmp_path):
+    qobuz = FakeQobuz([Quality.CD])
+    source = FakeByteSource(_flac_bytes(512))
+
+    class ExplodingLyrics(FakeLyrics):
+        def lrc(self, track):
+            raise RuntimeError("lrclib down")
+
+    engine, target = make_engine(qobuz, source, tmp_path, lyrics=ExplodingLyrics())
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert not outcome.lyrics_saved
+    assert not (target / "Artist/01 - Song.lrc").exists()
+
+
+def test_no_lyrics_when_none_found(tmp_path):
+    qobuz = FakeQobuz([Quality.CD])
+    source = FakeByteSource(_flac_bytes(512))
+    lyrics = FakeLyrics(text=None)
+    engine, target = make_engine(qobuz, source, tmp_path, lyrics=lyrics)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert not outcome.lyrics_saved
