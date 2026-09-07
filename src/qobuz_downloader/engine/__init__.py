@@ -5,7 +5,7 @@ from pathlib import Path
 from mutagen import MutagenError
 from mutagen.flac import FLAC
 
-from qobuz_downloader.domain import Complete, Failed, Outcome, Quality, Track
+from qobuz_downloader.domain import Complete, Failed, Outcome, Quality, Stream, Track
 from qobuz_downloader.engine._source import ByteSource, HttpByteSource
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.qobuz import Qobuz
@@ -39,26 +39,32 @@ class Engine:
         ]
         if not rungs:
             return Failed(reason="only lossy audio is available for this track")
-        delivered = rungs[-1]
-        path = self._naming.path_for(track, extension=_EXTENSIONS[delivered])
+        requested = rungs[-1]
+        path = self._naming.path_for(track, extension=_EXTENSIONS[requested])
         partial = path.with_suffix(path.suffix + ".part")
         last_error = ""
         for delay in (0.0, *self._retry_delays):
             if delay:
                 time.sleep(delay)
             try:
-                self._attempt(track, delivered, partial)
+                stream = self._attempt(track, requested, partial)
                 self._validate(partial)
                 partial.replace(path)
                 return Complete(
-                    path=path, quality=delivered, fell_back=delivered != preferred
+                    path=path,
+                    quality=stream.quality,
+                    fell_back=stream.quality < preferred,
+                    sampling_rate=stream.sampling_rate,
+                    bit_depth=stream.bit_depth,
                 )
             except Exception as error:
                 last_error = str(error) or type(error).__name__
         return Failed(reason=last_error)
 
-    def _attempt(self, track: Track, delivered: Quality, partial: Path) -> None:
-        stream = self._qobuz.stream(track, delivered)
+    def _attempt(
+        self, track: Track, requested: Quality, partial: Path
+    ) -> Stream:
+        stream = self._qobuz.stream(track, requested)
         start = partial.stat().st_size if partial.exists() else 0
         response = self._source.stream(stream.url, start)
         if start and response.status != 206:
@@ -76,6 +82,7 @@ class Engine:
                 raise ConnectionError(
                     f"incomplete download: {actual} of {expected} bytes"
                 )
+        return stream
 
     def _validate(self, partial: Path) -> None:
         try:

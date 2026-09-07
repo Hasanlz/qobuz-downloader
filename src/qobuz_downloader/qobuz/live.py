@@ -30,6 +30,7 @@ _FORMAT_IDS = {
     Quality.HIRES_96: 7,
     Quality.HIRES_192: 27,
 }
+_FORMAT_QUALITIES = {value: key for key, value in _FORMAT_IDS.items()}
 
 
 def _display_name(value: Any) -> str:
@@ -44,6 +45,16 @@ class LiveQobuz(Qobuz):
         self._secret = ""
         self._tracks: dict[str, list[Track]] = {}
         self._raw: dict[str, dict[str, Any]] = {}
+
+    @classmethod
+    def from_token(
+        cls, app_id: str, app_secret: str, user_auth_token: str
+    ) -> "LiveQobuz":
+        instance = cls()
+        instance._http.headers["X-App-Id"] = app_id
+        instance._http.headers["X-User-Auth-Token"] = user_auth_token
+        instance._secret = app_secret
+        return instance
 
     def login(self, email: str, password: str) -> None:
         app_id, secrets = fetch_app_credentials()
@@ -122,8 +133,12 @@ class LiveQobuz(Qobuz):
         return ladder
 
     def stream(self, track: Track, quality: Quality) -> Stream:
+        payload = self._stream_request(track.id, _FORMAT_IDS[quality], self._secret)
         return Stream(
-            url=self._stream_request(track.id, _FORMAT_IDS[quality], self._secret)["url"]
+            url=payload["url"],
+            quality=_FORMAT_QUALITIES.get(payload.get("format_id"), quality),
+            sampling_rate=payload.get("sampling_rate"),
+            bit_depth=payload.get("bit_depth"),
         )
 
     def search_tracks(self, query: str, limit: int) -> list[Track]:

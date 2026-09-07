@@ -14,7 +14,7 @@ from qobuz_downloader.domain import (
     UnmatchedTrack,
 )
 from qobuz_downloader.engine import Engine
-from qobuz_downloader.match import LiveSpotify
+from qobuz_downloader.match import LiveSpotify, make_matcher
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.queue import Queue, SqliteQueue
 from qobuz_downloader.qobuz import LiveQobuz
@@ -33,15 +33,12 @@ def _quality(value: str) -> Quality:
 
 
 def _collect(
-    qobuz: LiveQobuz, matcher: LiveSpotify | None, url: str
+    qobuz: LiveQobuz, matcher: LiveSpotify, url: str, limit: int | None = None
 ) -> tuple[list[Track], list[UnmatchedTrack]]:
     if "qobuz.com" in url:
-        return qobuz.tracks(qobuz.item(url)), []
-    if matcher is None:
-        raise RuntimeError(
-            "Spotify URL given but SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET are not set"
-        )
-    result = matcher.match(url)
+        tracks = qobuz.tracks(qobuz.item(url))
+        return (tracks[:limit] if limit is not None else tracks), []
+    result = matcher.match(url, limit)
     if isinstance(result, Unmatched):
         return [], [UnmatchedTrack(title=url, artist="", reason=result.reason)]
     return result.tracks, result.unmatched
@@ -66,6 +63,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--db", default=None, help="queue database path (default: <dir>/.queue.sqlite3)"
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="queue at most this many tracks per URL",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -73,35 +76,38 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as error:
         parser.error(str(error))
 
-    email = os.environ.get("QOBUZ_EMAIL")
-    password = os.environ.get("QOBUZ_PASSWORD")
-    if not (email and password):
-        print("set QOBUZ_EMAIL and QOBUZ_PASSWORD", file=sys.stderr)
-        return 2
-
-    qobuz = LiveQobuz()
-    try:
-        qobuz.login(email, password)
-    except (ValueError, RuntimeError, httpx.HTTPError) as error:
-        print(f"login failed: {error}", file=sys.stderr)
-        return 1
+    token = os.environ.get("QOBUZ_USER_AUTH_TOKEN")
+    app_id = os.environ.get("QOBUZ_APP_ID")
+    app_secret = os.environ.get("QOBUZ_APP_SECRET")
+    if token and app_id and app_secret:
+        qobuz = LiveQobuz.from_token(app_id, app_secret, token)
+    else:
+        email = os.environ.get("QOBUZ_EMAIL")
+        password = os.environ.get("QOBUZ_PASSWORD")
+        if not (email and password):
+            print(
+                "set QOBUZ_USER_AUTH_TOKEN + QOBUZ_APP_ID + QOBUZ_APP_SECRET,"
+                " or QOBUZ_EMAIL + QOBUZ_PASSWORD",
+                file=sys.stderr,
+            )
+            return 2
+        qobuz = LiveQobuz()
+        try:
+            qobuz.login(email, password)
+        except (ValueError, RuntimeError, httpx.HTTPError) as error:
+            print(f"login failed: {error}", file=sys.stderr)
+            return 1
 
     root = Path(args.dir).expanduser()
     naming = Naming(args.dir_template, args.file_template, root=root)
     engine = Engine(qobuz, naming)
     queue = SqliteQueue(Path(args.db) if args.db else root / ".queue.sqlite3")
-    spotify_id = os.environ.get("SPOTIFY_CLIENT_ID")
-    spotify_secret = os.environ.get("SPOTIFY_CLIENT_SECRET")
-    matcher = (
-        LiveSpotify(qobuz, spotify_id, spotify_secret)
-        if spotify_id and spotify_secret
-        else None
-    )
+    matcher = make_matcher(qobuz)
 
     had_error = False
     for url in args.urls:
         try:
-            tracks, unmatched = _collect(qobuz, matcher, url)
+            tracks, unmatched = _collect(qobuz, matcher, url, args.limit)
         except (ValueError, RuntimeError) as error:
             print(f"error: {error}", file=sys.stderr)
             had_error = True
@@ -122,8 +128,9 @@ def main(argv: list[str] | None = None) -> int:
         outcome = engine.download(track, preferred)
         if isinstance(outcome, Complete):
             queue.complete(track)
-            note = f", fell back to {outcome.quality.name.lower()}" if outcome.fell_back else ""
-            print(f"done: {track.artist} - {track.title}{note}")
+            specs = f"{outcome.bit_depth}/{outcome.sampling_rate:g}" if outcome.sampling_rate else outcome.quality.name.lower()
+            note = f", fell back from {preferred.name.lower()}" if outcome.fell_back else ""
+            print(f"done: {track.artist} - {track.title} ({specs}{note})")
         else:
             failures += 1
             queue.fail(track, outcome.reason)

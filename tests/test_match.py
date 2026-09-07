@@ -1,9 +1,11 @@
+import json
+
 import httpx
 import pytest
 
 from qobuz_downloader.domain import Album, Matched, Quality, Track, Unmatched
 from qobuz_downloader.match import LiveSpotify
-from qobuz_downloader.match._spotify import Spotify
+from qobuz_downloader.match._spotify import EmbedSpotify
 from qobuz_downloader.match._spotify_urls import parse_spotify
 from qobuz_downloader.qobuz import Qobuz
 
@@ -43,13 +45,26 @@ QOBUZ_TRACK = Track(
 )
 
 
-def spotify_api(handler):
+def embed_html(entity):
+    payload = {"props": {"pageProps": {"state": {"data": {"entity": entity}}}}}
+    return (
+        '<html><script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(payload)}</script></html>"
+    )
+
+
+def embed_client(routes):
+    def handler(request):
+        for fragment, entity in routes.items():
+            if fragment in str(request.url):
+                return httpx.Response(200, text=embed_html(entity))
+        return httpx.Response(404, text="not found")
+
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 def make_matcher(qobuz, client):
-    api = Spotify("cid", "secret", http=client)
-    return LiveSpotify(qobuz, "cid", "secret", api=api)
+    return LiveSpotify(qobuz, api=EmbedSpotify(http=client))
 
 
 def test_parse_spotify_urls():
@@ -71,22 +86,18 @@ def test_parse_spotify_rejects_other_hosts():
 
 
 def test_track_exact_match():
-    def handler(request):
-        if "accounts.spotify.com" in str(request.url):
-            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
-        return httpx.Response(
-            200,
-            json={
+    client = embed_client(
+        {
+            "/track/": {
                 "id": "s1",
                 "name": "Blinding Lights",
                 "artists": [{"name": "The Weeknd"}],
-                "album": {"name": "After Hours"},
-                "duration_ms": 200000,
-            },
-        )
-
+                "duration": 200000,
+            }
+        }
+    )
     qobuz = FakeQobuz(tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]})
-    matcher = make_matcher(qobuz, spotify_api(handler))
+    matcher = make_matcher(qobuz, client)
 
     result = matcher.match("https://open.spotify.com/track/s1")
 
@@ -96,22 +107,18 @@ def test_track_exact_match():
 
 
 def test_track_without_candidate_is_unmatched():
-    def handler(request):
-        if "accounts.spotify.com" in str(request.url):
-            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
-        return httpx.Response(
-            200,
-            json={
+    client = embed_client(
+        {
+            "/track/": {
                 "id": "s2",
                 "name": "Obscure B-Side",
                 "artists": [{"name": "Nobody"}],
-                "album": {"name": "Nowhere"},
-                "duration_ms": 100000,
-            },
-        )
-
+                "duration": 100000,
+            }
+        }
+    )
     qobuz = FakeQobuz(tracks_by_query={"Nobody Obscure B-Side": []})
-    matcher = make_matcher(qobuz, spotify_api(handler))
+    matcher = make_matcher(qobuz, client)
 
     result = matcher.match("https://open.spotify.com/track/s2")
 
@@ -120,20 +127,16 @@ def test_track_without_candidate_is_unmatched():
 
 
 def test_track_with_dissimilar_title_is_unmatched():
-    def handler(request):
-        if "accounts.spotify.com" in str(request.url):
-            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
-        return httpx.Response(
-            200,
-            json={
+    client = embed_client(
+        {
+            "/track/": {
                 "id": "s3",
                 "name": "Completely Different Song",
                 "artists": [{"name": "The Weeknd"}],
-                "album": {"name": "After Hours"},
-                "duration_ms": 200000,
-            },
-        )
-
+                "duration": 200000,
+            }
+        }
+    )
     qobuz = FakeQobuz(
         tracks_by_query={
             "The Weeknd Completely Different Song": [
@@ -147,7 +150,7 @@ def test_track_with_dissimilar_title_is_unmatched():
             ]
         }
     )
-    matcher = make_matcher(qobuz, spotify_api(handler))
+    matcher = make_matcher(qobuz, client)
 
     result = matcher.match("https://open.spotify.com/track/s3")
 
@@ -156,28 +159,36 @@ def test_track_with_dissimilar_title_is_unmatched():
 
 def test_album_match_expands_to_tracks():
     qobuz_album = Album(
-        id="qa1", title="After Hours", artist="The Weeknd", tracks_count=14
+        id="qa1", title="After Hours", artist="The Weeknd", tracks_count=2
     )
     album_tracks = [QOBUZ_TRACK]
-
-    def handler(request):
-        if "accounts.spotify.com" in str(request.url):
-            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
-        return httpx.Response(
-            200,
-            json={
-                "id": "sa1",
+    client = embed_client(
+        {
+            "/album/": {
                 "name": "After Hours",
-                "artists": [{"name": "The Weeknd"}],
-                "total_tracks": 14,
-            },
-        )
-
+                "artists": [],
+                "trackList": [
+                    {
+                        "uri": "spotify:track:t1",
+                        "title": "Alone Again",
+                        "subtitle": "The Weeknd",
+                        "duration": 250000,
+                    },
+                    {
+                        "uri": "spotify:track:t2",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
     qobuz = FakeQobuz(
         albums_by_query={"The Weeknd After Hours": [qobuz_album]},
         tracks_by_album={"qa1": album_tracks},
     )
-    matcher = make_matcher(qobuz, spotify_api(handler))
+    matcher = make_matcher(qobuz, client)
 
     result = matcher.match("https://open.spotify.com/album/sa1")
 
@@ -185,38 +196,30 @@ def test_album_match_expands_to_tracks():
     assert result.tracks == album_tracks
 
 
-def test_playlist_matches_track_by_track(tmp_path):
-    def handler(request):
-        if "accounts.spotify.com" in str(request.url):
-            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
-        return httpx.Response(
-            200,
-            json={
-                "items": [
+def test_playlist_matches_track_by_track():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
                     {
-                        "track": {
-                            "id": "s1",
-                            "name": "Blinding Lights",
-                            "artists": [{"name": "The Weeknd"}],
-                            "album": {"name": "After Hours"},
-                            "duration_ms": 200000,
-                        }
+                        "uri": "spotify:track:s1",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
                     },
                     {
-                        "track": {
-                            "id": "s2",
-                            "name": "Unheard Noise",
-                            "artists": [{"name": "Ghost Artist"}],
-                            "album": {"name": "Void"},
-                            "duration_ms": 90000,
-                        }
+                        "uri": "spotify:track:s2",
+                        "title": "Unheard Noise",
+                        "subtitle": "Ghost Artist",
+                        "duration": 90000,
                     },
-                ]
-            },
-        )
-
+                ],
+            }
+        }
+    )
     qobuz = FakeQobuz(tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]})
-    matcher = make_matcher(qobuz, spotify_api(handler))
+    matcher = make_matcher(qobuz, client)
 
     result = matcher.match("https://open.spotify.com/playlist/p1")
 
@@ -227,14 +230,115 @@ def test_playlist_matches_track_by_track(tmp_path):
 
 
 def test_playlist_with_no_matches_is_unmatched():
-    def handler(request):
-        if "accounts.spotify.com" in str(request.url):
-            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
-        return httpx.Response(200, json={"items": []})
-
-    matcher = make_matcher(FakeQobuz(), spotify_api(handler))
+    client = embed_client({"/playlist/": {"name": "Empty", "trackList": []}})
+    matcher = make_matcher(FakeQobuz(), client)
 
     result = matcher.match("https://open.spotify.com/playlist/empty")
 
     assert isinstance(result, Unmatched)
     assert "0 tracks" in result.reason
+
+
+def test_public_spotify_extracts_playlist_tracks():
+    from qobuz_downloader.match._public import PublicSpotify
+
+    class FakePublic:
+        @staticmethod
+        def playlist_info(playlist_id):
+            yield {
+                "items": [
+                    {
+                        "itemV2": {
+                            "data": {
+                                "__typename": "Track",
+                                "uri": "spotify:track:aaa1111111111111111111",
+                                "name": "Billie Jean",
+                                "trackDuration": {"totalMilliseconds": 293802},
+                                "artists": {
+                                    "items": [
+                                        {
+                                            "profile": {
+                                                "name": "Michael Jackson"
+                                            }
+                                        }
+                                    ]
+                                },
+                                "albumOfTrack": {"name": "Thriller"},
+                            }
+                        }
+                    },
+                    {"itemV2": {"data": {"__typename": "Intro", "uri": "x"}}},
+                ]
+            }
+
+    adapter = PublicSpotify.__new__(PublicSpotify)
+    adapter._public = FakePublic
+
+    tracks = adapter.playlist_tracks("p1")
+
+    assert len(tracks) == 1
+    assert tracks[0]["name"] == "Billie Jean"
+    assert tracks[0]["artists"] == [{"name": "Michael Jackson"}]
+    assert tracks[0]["duration_ms"] == 293802
+
+
+def test_embed_spotify_maps_track_payload():
+    client = embed_client(
+        {
+            "/track/": {
+                "id": "s1",
+                "name": "Blinding Lights",
+                "artists": [{"name": "The Weeknd"}],
+                "duration": 200000,
+            }
+        }
+    )
+    embed = EmbedSpotify(http=client)
+
+    payload = embed.track("s1")
+
+    assert payload["id"] == "s1"
+    assert payload["name"] == "Blinding Lights"
+    assert payload["duration_ms"] == 200000
+    assert payload["artists"] == [{"name": "The Weeknd"}]
+
+
+def test_embed_spotify_takes_album_artist_from_first_track():
+    client = embed_client(
+        {
+            "/album/": {
+                "name": "After Hours",
+                "artists": [],
+                "trackList": [
+                    {
+                        "uri": "spotify:track:t1",
+                        "title": "Alone Again",
+                        "subtitle": "The Weeknd",
+                        "duration": 250000,
+                    }
+                ],
+            }
+        }
+    )
+    embed = EmbedSpotify(http=client)
+
+    payload = embed.album("sa1")
+
+    assert payload["name"] == "After Hours"
+    assert payload["artists"] == [{"name": "The Weeknd"}]
+    assert payload["total_tracks"] == 1
+
+
+def test_embed_spotify_raises_on_missing_entity():
+    payload = {"props": {"pageProps": {"status": 404, "state": None}}}
+    html = (
+        '<html><script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(payload)}</script></html>"
+    )
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text=html))
+    )
+    embed = EmbedSpotify(http=client)
+
+    with pytest.raises(RuntimeError):
+        embed.track("missing")

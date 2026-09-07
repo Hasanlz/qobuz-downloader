@@ -40,7 +40,12 @@ class FakeQobuz(Qobuz):
 
     def stream(self, track, quality):
         self.stream_calls += 1
-        return Stream(url=f"https://cdn.test/{track.id}/{self.stream_calls}")
+        return Stream(
+            url=f"https://cdn.test/{track.id}/{self.stream_calls}",
+            quality=quality,
+            sampling_rate=44.1,
+            bit_depth=16,
+        )
 
 
 class FakeByteSource(ByteSource):

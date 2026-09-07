@@ -1,8 +1,89 @@
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
+import re
+import json
 
 _TOKEN_URL = "https://accounts.spotify.com/api/token"
+
+
+class SpotifyMetadata(Protocol):
+    def track(self, spotify_id: str) -> dict[str, Any]: ...
+
+    def album(self, spotify_id: str) -> dict[str, Any]: ...
+
+    def playlist_tracks(
+        self, spotify_id: str, limit: int | None = None
+    ) -> list[dict[str, Any]]: ...
+
+
+class EmbedSpotify:
+    def __init__(self, http: httpx.Client | None = None) -> None:
+        self._http = http or httpx.Client(
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
+            follow_redirects=True,
+            timeout=30.0,
+        )
+
+    def track(self, spotify_id: str) -> dict[str, Any]:
+        entity = self._entity("track", spotify_id)
+        return {
+            "id": entity["id"],
+            "name": entity.get("name", ""),
+            "artists": entity.get("artists", []),
+            "album": {},
+            "duration_ms": entity.get("duration"),
+        }
+
+    def album(self, spotify_id: str) -> dict[str, Any]:
+        entity = self._entity("album", spotify_id)
+        track_list = entity.get("trackList") or []
+        artists = entity.get("artists") or (
+            [{"name": track_list[0].get("subtitle", "")}] if track_list else []
+        )
+        return {
+            "id": spotify_id,
+            "name": entity.get("name", ""),
+            "artists": artists,
+            "total_tracks": len(track_list),
+        }
+
+    def playlist_tracks(
+        self, spotify_id: str, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        entity = self._entity("playlist", spotify_id)
+        entries = entity.get("trackList", [])
+        if limit is not None:
+            entries = entries[:limit]
+        return [
+            {
+                "id": entry["uri"].rsplit(":", 1)[-1],
+                "name": entry.get("title", ""),
+                "artists": [{"name": entry.get("subtitle", "")}],
+                "album": {},
+                "duration_ms": entry.get("duration"),
+            }
+            for entry in entries
+        ]
+
+    def _entity(self, kind: str, spotify_id: str) -> dict[str, Any]:
+        response = self._http.get(f"https://open.spotify.com/embed/{kind}/{spotify_id}")
+        response.raise_for_status()
+        match = _NEXT_DATA.search(response.text)
+        if match is None:
+            raise RuntimeError(f"no embed metadata for spotify {kind} {spotify_id}")
+        page = json.loads(match.group(1))["props"]["pageProps"]
+        entity = (page.get("state") or {}).get("data", {}).get("entity")
+        if not entity:
+            raise RuntimeError(
+                f"spotify {kind} {spotify_id} not found (embed status {page.get('status')})"
+            )
+        return entity
+
+
+_NEXT_DATA = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S
+)
 
 
 class Spotify:

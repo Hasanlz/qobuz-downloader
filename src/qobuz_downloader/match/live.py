@@ -11,7 +11,7 @@ from qobuz_downloader.domain import (
     UnmatchedTrack,
 )
 from qobuz_downloader.match._interface import Matcher
-from qobuz_downloader.match._spotify import Spotify
+from qobuz_downloader.match._spotify import EmbedSpotify, Spotify, SpotifyMetadata
 from qobuz_downloader.match._spotify_urls import parse_spotify
 from qobuz_downloader.qobuz import Qobuz
 
@@ -66,20 +66,20 @@ class LiveSpotify(Matcher):
     def __init__(
         self,
         qobuz: Qobuz,
-        client_id: str,
-        client_secret: str,
-        api: Spotify | None = None,
+        client_id: str = "",
+        client_secret: str = "",
+        api: SpotifyMetadata | None = None,
     ) -> None:
         self._qobuz = qobuz
-        self._api = api or Spotify(client_id, client_secret)
+        self._api = api or EmbedSpotify()
 
-    def match(self, url: str) -> MatchResult:
+    def match(self, url: str, limit: int | None = None) -> MatchResult:
         kind, spotify_id = parse_spotify(url)
         if kind == "track":
             return self._match_track_url(spotify_id)
         if kind == "album":
             return self._match_album_url(spotify_id)
-        return self._match_playlist(spotify_id)
+        return self._match_playlist(spotify_id, limit)
 
     def _match_track_url(self, spotify_id: str) -> MatchResult:
         spotify_track = _spotify_track(self._api.track(spotify_id))
@@ -107,10 +107,10 @@ class LiveSpotify(Matcher):
             )
         return Matched(self._qobuz.tracks(candidate))
 
-    def _match_playlist(self, spotify_id: str) -> MatchResult:
+    def _match_playlist(self, spotify_id: str, limit: int | None = None) -> MatchResult:
         matched: list[Track] = []
         unmatched: list[UnmatchedTrack] = []
-        for payload in self._api.playlist_tracks(spotify_id):
+        for payload in self._api.playlist_tracks(spotify_id, limit):
             spotify_track = _spotify_track(payload)
             candidate = self._best_track(spotify_track)
             if candidate is None:

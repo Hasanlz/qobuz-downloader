@@ -46,6 +46,9 @@ type Item = Track | Album | Artist | Playlist
 @dataclass(frozen=True, slots=True)
 class Stream:
     url: str
+    quality: Quality
+    sampling_rate: float | None = None
+    bit_depth: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +56,8 @@ class Complete:
     path: Path
     quality: Quality
     fell_back: bool
+    sampling_rate: float | None = None
+    bit_depth: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
