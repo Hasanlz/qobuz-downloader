@@ -1,0 +1,132 @@
+# qobuz-downloader
+
+Saves lossless audio files (FLAC) from a Qobuz subscription to your local disk. Accepts both Qobuz and Spotify URLs — Spotify links are matched against Qobuz's catalog automatically, downloads always come from your own Qobuz account.
+
+## Requirements
+
+- Python 3.12+
+- An active **Qobuz subscription** (free accounts cannot download; Studio tier recommended for Hi-Res)
+
+## Install
+
+```bash
+git clone https://github.com/Hasanlz/qobuz-downloader.git
+cd qobuz-downloader
+pip install -e ".[big-playlists]"
+```
+
+The `big-playlists` extra adds support for Spotify playlists over 100 tracks (tested with 1000+). Without it, playlist matching falls back to the embed page, which caps at 100 tracks.
+
+## Credentials
+
+Set environment variables before running.
+
+**Preferred — token auth (no stored password):**
+
+```bash
+export QOBUZ_USER_AUTH_TOKEN="..."   # user auth token
+export QOBUZ_APP_ID="..."            # 9-digit app id
+export QOBUZ_APP_SECRET="..."        # 32-char app secret
+```
+
+**Alternative — email/password** (app id and secret are scraped automatically):
+
+```bash
+export QOBUZ_EMAIL="you@example.com"
+export QOBUZ_PASSWORD="..."
+```
+
+No Spotify credentials are needed — metadata comes from public embed pages / Spotify's public partner API.
+
+## Usage
+
+```bash
+qobuz-downloader URL [URL ...] [options]
+```
+
+### URL types
+
+| Input | Behavior |
+|---|---|
+| `https://open.qobuz.com/track/25273041` | downloads the track |
+| `https://play.qobuz.com/album/0060254746222` | downloads every track on the album |
+| `https://www.qobuz.com/us-en/interpreter/amy-winehouse/5045` | downloads the artist's albums |
+| `https://open.spotify.com/track/...` | finds the track on Qobuz, downloads it |
+| `https://open.spotify.com/album/...` | matches the album, downloads it |
+| `https://open.spotify.com/playlist/...` | matches and downloads track by track |
+
+Qobuz and Spotify URLs can be mixed in one command.
+
+### Examples
+
+Download an album at the best available quality:
+
+```bash
+qobuz-downloader https://play.qobuz.com/album/0060254746222 --dir ~/Music
+```
+
+Download a 1000-track Spotify playlist:
+
+```bash
+qobuz-downloader https://open.spotify.com/playlist/6Nq4BLzd6vTMIye1kkUhBN --dir ~/Music
+```
+
+Test the waters first — fetch and download only the first 3 tracks:
+
+```bash
+qobuz-downloader https://open.spotify.com/playlist/6Nq4BLzd6vTMIye1kkUhBN --limit 3 --dir ~/Music
+```
+
+Force CD quality (16-bit/44.1 kHz) to save bandwidth:
+
+```bash
+qobuz-downloader https://play.qobuz.com/album/0060254746222 --quality cd
+```
+
+Custom file layout:
+
+```bash
+qobuz-downloader URL --dir-template "{artist}/{year} {album}" --file-template "{tracknumber}. {title}"
+```
+
+### Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dir` | `.` | download directory (also where the queue database lives) |
+| `--quality` | `hires` | preferred quality ceiling: `cd`, `hires96`, `hires` |
+| `--dir-template` | `{artist}/{album}` | directory layout; placeholders: `{artist}`, `{album}`, `{title}`, `{tracknumber}` |
+| `--file-template` | `{tracknumber} - {title}` | filename pattern; must not contain path separators |
+| `--limit` | none | queue at most this many tracks per URL |
+| `--db` | `<dir>/.queue.sqlite3` | queue database location |
+
+## Quality: what you get
+
+You always get the **best audio the track actually offers**, never more, never less:
+
+- The tool requests Hi-Res by default (24-bit, up to 192 kHz)
+- If the track's master is lower (e.g. 24-bit/44.1 kHz) you get that, and the output says so:
+  `done: The Weeknd - Blinding Lights (24/44.1, fell back from hires_192)`
+- Pure lossless FLAC only — MP3 is never downloaded (use `--quality cd` as a bandwidth cap)
+
+## Queue, retries, interruptions
+
+State lives in `.queue.sqlite3` inside your download directory:
+
+- Tracks already downloaded are **skipped** on re-runs — safe to re-run any command
+- Interrupted downloads leave a `.part` file and **resume** from where they stopped (fresh stream URL fetched automatically; if the server won't resume, it restarts cleanly)
+- Failed tracks stay marked failed and are **retried the next time you run any command** that re-adds them
+- Every file is validated as a real FLAC before being renamed into place
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+python -m pytest tests
+```
+
+Design docs: [`CONTEXT.md`](CONTEXT.md) (domain glossary) and [`docs/adr/`](docs/adr/) (decisions).
+
+## Disclaimer
+
+For educational purposes and personal use with your own Qobuz subscription. By using this tool you accept the [Qobuz API Terms of Use](https://static.qobuz.com/apps/api/QobuzAPI-TermsofUse.pdf). Not affiliated with Qobuz or Spotify.
