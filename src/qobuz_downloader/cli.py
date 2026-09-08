@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="qobuz-downloader",
         description="Saves lossless audio files from a Qobuz subscription to the local disk.",
     )
-    parser.add_argument("urls", nargs="+", help="Qobuz or Spotify URLs")
+    parser.add_argument("urls", nargs="*", help="Qobuz or Spotify URLs (omit to resume pending downloads)")
     parser.add_argument(
         "--dir", default=".", help="download directory (default: current directory)"
     )
@@ -131,23 +131,41 @@ def main(argv: list[str] | None = None) -> int:
             who = f"{miss.artist} - {miss.title}" if miss.artist else miss.title
             print(f"unmatched: {who} ({miss.reason})", file=sys.stderr)
 
+    if not args.urls:
+        requeued = queue.requeue_failed()
+        print(f"resuming: {requeued} failed track(s) re-queued")
+
     pending = queue.pending()
+    if not pending:
+        print("queue is empty — pass URLs to download something")
+        return 1 if had_error else 0
     print(f"downloading {len(pending)} track(s) at {args.quality}")
     failures = 0
+    consecutive_failures = 0
     for track in pending:
         outcome = engine.download(track, preferred)
         if isinstance(outcome, Complete):
             queue.complete(track)
+            consecutive_failures = 0
             specs = f"{outcome.bit_depth}/{outcome.sampling_rate:g}" if outcome.sampling_rate else outcome.quality.name.lower()
             note = f", fell back from {preferred.name.lower()}" if outcome.fell_back else ""
             print(f"done: {track.artist} - {track.title} ({specs}{note})")
         else:
             failures += 1
+            consecutive_failures += 1
             queue.fail(track, outcome.reason)
             print(
                 f"failed: {track.artist} - {track.title} ({outcome.reason})",
                 file=sys.stderr,
             )
+            if consecutive_failures >= 5:
+                remaining = len(queue.pending())
+                print(
+                    f"aborting after 5 consecutive failures (network down?):"
+                    f" {remaining} track(s) still pending — re-run the same command to resume",
+                    file=sys.stderr,
+                )
+                return 1
     return 1 if failures or had_error else 0
 
 

@@ -32,6 +32,9 @@ class Queue(ABC):
     @abstractmethod
     def fail(self, track: Track, reason: str) -> None: ...
 
+    @abstractmethod
+    def requeue_failed(self) -> int: ...
+
 
 class InMemoryQueue(Queue):
     def __init__(self) -> None:
@@ -66,6 +69,17 @@ class InMemoryQueue(Queue):
     def fail(self, track: Track, reason: str) -> None:
         self._status[track.id] = Status.FAILED
         self._reasons[track.id] = reason
+
+    def requeue_failed(self) -> int:
+        failed = [
+            track_id
+            for track_id, status in self._status.items()
+            if status is Status.FAILED
+        ]
+        for track_id in failed:
+            self._status[track_id] = Status.PENDING
+            self._reasons.pop(track_id, None)
+        return len(failed)
 
 
 _COLUMNS = "id, title, artist, album, track_number, duration_seconds"
@@ -151,6 +165,14 @@ class SqliteQueue(Queue):
                 "UPDATE tracks SET status = ?, reason = ? WHERE id = ?",
                 (Status.FAILED.name, reason, track.id),
             )
+
+    def requeue_failed(self) -> int:
+        with self._db:
+            cursor = self._db.execute(
+                "UPDATE tracks SET status = ?, reason = NULL WHERE status = ?",
+                (Status.PENDING.name, Status.FAILED.name),
+            )
+        return cursor.rowcount
 
     def close(self) -> None:
         self._db.close()

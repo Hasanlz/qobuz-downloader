@@ -87,3 +87,6 @@ _Avoid_: format string, naming scheme
 
 **Lyrics file**:
 A sidecar .lrc file, timestamped line by line, saved next to the audio of a Track when lyrics are found for it.
+
+**Resume**:
+Running the tool without URLs. Drains the Queue's pending Tracks, re-queuing failed ones, without touching the source playlists again.

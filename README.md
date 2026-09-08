@@ -101,6 +101,8 @@ qobuz-downloader URL --dir-template "{artist}/{year} {album}" --file-template "{
 | `--db` | `<dir>/.queue.sqlite3` | queue database location |
 | `--no-lyrics` | off | skip saving `.lrc` lyric files |
 
+*Omit all URLs to resume whatever is pending in the queue database.*
+
 ## Lyrics
 
 By default every downloaded track also gets a synced **`.lrc`** sidecar file next to the audio — `01 - Rehab.flac` gets `01 - Rehab.lrc` — sourced from [LRCLIB](https://lrclib.net) (free, no account). Lyrics lookup never blocks a download: if no synced lyrics exist for a track, only the audio is saved. Use `--no-lyrics` to disable.
@@ -122,6 +124,26 @@ State lives in `.queue.sqlite3` inside your download directory:
 - Interrupted downloads leave a `.part` file and **resume** from where they stopped (fresh stream URL fetched automatically; if the server won't resume, it restarts cleanly)
 - Failed tracks stay marked failed and are **retried the next time you run any command** that re-adds them
 - Every file is validated as a real FLAC before being renamed into place
+
+### Resuming after a disconnect
+
+If your internet drops mid-playlist (say 50 of 1000 downloaded), just run the **same command again**:
+
+```bash
+qobuz-downloader https://open.spotify.com/playlist/6Nq4BLzd6vTMIye1kkUhBN --dir ~/Music
+```
+
+The 50 completed tracks are skipped, the interrupted one resumes from its `.part`, and the rest continue.
+
+To resume **without re-fetching and re-matching the playlist** (~10 minutes saved on a 1000-track list), omit the URLs entirely:
+
+```bash
+qobuz-downloader --dir ~/Music
+```
+
+This re-queues failed tracks and downloads everything still pending from the queue database.
+
+**Circuit breaker:** if 5 tracks fail in a row, the run stops instead of churning through the whole list while the network is down. Fix your connection and re-run — the queue remembers exactly where it left off.
 
 ## Development
 
