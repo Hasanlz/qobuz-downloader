@@ -14,9 +14,7 @@ class SpotifyMetadata(Protocol):
 
     def playlist_name(self, spotify_id: str) -> str: ...
 
-    def playlist_tracks(
-        self, spotify_id: str, limit: int | None = None
-    ) -> list[dict[str, Any]]: ...
+    def playlist_tracks(self, spotify_id: str) -> list[dict[str, Any]]: ...
 
 
 class EmbedSpotify:
@@ -53,13 +51,9 @@ class EmbedSpotify:
     def playlist_name(self, spotify_id: str) -> str:
         return self._entity("playlist", spotify_id).get("name", "")
 
-    def playlist_tracks(
-        self, spotify_id: str, limit: int | None = None
-    ) -> list[dict[str, Any]]:
+    def playlist_tracks(self, spotify_id: str) -> list[dict[str, Any]]:
         entity = self._entity("playlist", spotify_id)
         entries = entity.get("trackList", [])
-        if limit is not None:
-            entries = entries[:limit]
         return [
             {
                 "id": entry["uri"].rsplit(":", 1)[-1],

@@ -13,7 +13,7 @@ from qobuz_downloader.domain import (
     UnmatchedTrack,
 )
 from qobuz_downloader.match._interface import Matcher
-from qobuz_downloader.match._spotify import EmbedSpotify, Spotify, SpotifyMetadata
+from qobuz_downloader.match._spotify import EmbedSpotify, SpotifyMetadata
 from qobuz_downloader.match._spotify_urls import parse_spotify
 from qobuz_downloader.qobuz import Qobuz
 
@@ -77,13 +77,13 @@ class LiveSpotify(Matcher):
         self._qobuz = qobuz
         self._api = api or EmbedSpotify()
 
-    def match(self, url: str, limit: int | None = None) -> MatchResult:
+    def match(self, url: str) -> MatchResult:
         kind, spotify_id = parse_spotify(url)
         if kind == "track":
             return self._match_track_url(spotify_id)
         if kind == "album":
             return self._match_album_url(spotify_id)
-        return self._match_playlist(spotify_id, limit)
+        return self._match_playlist(spotify_id)
 
     def _match_track_url(self, spotify_id: str) -> MatchResult:
         spotify_track = _spotify_track(self._api.track(spotify_id))
@@ -117,13 +117,13 @@ class LiveSpotify(Matcher):
             ]
         )
 
-    def _match_playlist(self, spotify_id: str, limit: int | None = None) -> MatchResult:
+    def _match_playlist(self, spotify_id: str) -> MatchResult:
         matched: list[Track] = []
         unmatched: list[UnmatchedTrack] = []
         name = self._api.playlist_name(spotify_id)
         log.info("matching playlist %s (%s) against Qobuz", spotify_id, name or "unnamed")
         for position, payload in enumerate(
-            self._api.playlist_tracks(spotify_id, limit), start=1
+            self._api.playlist_tracks(spotify_id), start=1
         ):
             spotify_track = _spotify_track(payload)
             log.info("[%d] %s - %s", position, spotify_track.artist, spotify_track.title)

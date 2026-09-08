@@ -8,7 +8,6 @@ import httpx
 
 from qobuz_downloader.domain import (
     Complete,
-    Failed,
     Quality,
     Track,
     Unmatched,
@@ -18,7 +17,7 @@ from qobuz_downloader.engine import Engine
 from qobuz_downloader.lyrics import LrcLib
 from qobuz_downloader.match import LiveSpotify, make_matcher
 from qobuz_downloader.naming import Naming
-from qobuz_downloader.queue import Queue, SqliteQueue
+from qobuz_downloader.queue import SqliteQueue
 from qobuz_downloader.qobuz import LiveQobuz
 
 _QUALITIES = {
@@ -37,14 +36,12 @@ def _quality(value: str) -> Quality:
 
 
 def _collect(
-    qobuz: LiveQobuz, matcher: LiveSpotify, url: str, limit: int | None = None
+    qobuz: LiveQobuz, matcher: LiveSpotify, url: str
 ) -> tuple[list[Track], list[UnmatchedTrack]]:
     log.info("collecting tracks from %s", url)
     if "qobuz.com" in url:
-        item = qobuz.item(url)
-        tracks = qobuz.tracks(item)
-        return (tracks[:limit] if limit is not None else tracks), []
-    result = matcher.match(url, limit)
+        return qobuz.tracks(qobuz.item(url)), []
+    result = matcher.match(url)
     if isinstance(result, Unmatched):
         return [], [UnmatchedTrack(title=url, artist="", reason=result.reason)]
     return result.tracks, result.unmatched
@@ -79,7 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         "--limit",
         type=int,
         default=None,
-        help="queue at most this many tracks per URL",
+        help="download at most this many tracks this run (every track is still"
+        " matched and queued; re-run to continue with the rest)",
     )
     parser.add_argument(
         "--no-lyrics",
@@ -140,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     had_error = False
     for url in args.urls:
         try:
-            tracks, unmatched = _collect(qobuz, matcher, url, args.limit)
+            tracks, unmatched = _collect(qobuz, matcher, url)
         except (ValueError, RuntimeError) as error:
             print(f"error: {error}", file=sys.stderr)
             had_error = True
@@ -162,10 +160,16 @@ def main(argv: list[str] | None = None) -> int:
     if not pending:
         print("queue is empty — pass URLs to download something")
         return 1 if had_error else 0
-    print(f"downloading {len(pending)} track(s) at {args.quality}")
+    # --limit caps this run's downloads only; the whole URL stays queued so a
+    # re-run picks up the rest
+    batch = pending[: max(args.limit, 0)] if args.limit is not None else pending
+    print(
+        f"downloading {len(batch)} track(s) at {args.quality}"
+        + (f" ({len(pending) - len(batch)} more queued)" if len(batch) < len(pending) else "")
+    )
     failures = 0
     consecutive_failures = 0
-    for track in pending:
+    for track in batch:
         outcome = engine.download(track, preferred)
         if isinstance(outcome, Complete):
             queue.complete(track)

@@ -1,5 +1,3 @@
-import pytest
-
 from qobuz_downloader.domain import Track
 from qobuz_downloader.queue import SqliteQueue
 

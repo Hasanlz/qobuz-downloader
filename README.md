@@ -77,11 +77,13 @@ Download a single track (goes straight into `--dir`, no subdirectory):
 qobuz-downloader https://open.qobuz.com/track/25273041 --dir ~/Music
 ```
 
-Test the waters first — fetch and download only the first 3 tracks:
+Test the waters first — the whole playlist is matched and queued, but only the first 3 tracks are downloaded:
 
 ```bash
 qobuz-downloader https://open.spotify.com/playlist/6Nq4BLzd6vTMIye1kkUhBN --limit 3 --dir ~/Music
 ```
+
+Every re-run of the same command downloads the next batch; omit `--limit` to download everything still queued.
 
 Force CD quality (16-bit/44.1 kHz) to save bandwidth:
 
@@ -103,7 +105,7 @@ qobuz-downloader URL --dir-template "{artist}/{album}" --file-template "{tracknu
 | `--quality` | `hires` | preferred quality ceiling: `cd`, `hires96`, `hires` |
 | `--dir-template` | *dynamic* | directory layout; placeholders: `{artist}`, `{album}`, `{collection}`, `{title}`, `{tracknumber}`. Empty by default: albums get a directory named after the album, playlists after the playlist, single tracks go straight into `--dir` |
 | `--file-template` | `{tracknumber} - {title}` | filename pattern; must not contain path separators. For playlists the number is the position in the playlist, for albums the position on the album |
-| `--limit` | none | queue at most this many tracks per URL |
+| `--limit` | none | download at most this many tracks this run; everything is still matched and queued, and re-running continues with the rest |
 | `--db` | `<dir>/.queue.sqlite3` | queue database location |
 | `--no-lyrics` | off | skip saving `.lrc` lyric files |
 

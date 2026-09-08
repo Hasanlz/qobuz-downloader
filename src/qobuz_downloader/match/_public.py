@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from typing import Any
 
 from qobuz_downloader.match._spotify import SpotifyMetadata
@@ -63,9 +62,7 @@ class PublicSpotify(SpotifyMetadata):
         playlist = (info.get("data") or {}).get("playlistV2") or {}
         return playlist.get("name", "")
 
-    def playlist_tracks(
-        self, spotify_id: str, limit: int | None = None
-    ) -> list[dict[str, Any]]:
+    def playlist_tracks(self, spotify_id: str) -> list[dict[str, Any]]:
         tracks: list[dict[str, Any]] = []
         for batch in self._public.playlist_info(spotify_id):
             for entry in batch.get("items", []):
@@ -89,6 +86,4 @@ class PublicSpotify(SpotifyMetadata):
                         ).get("totalMilliseconds"),
                     }
                 )
-                if limit is not None and len(tracks) >= limit:
-                    return tracks
         return tracks

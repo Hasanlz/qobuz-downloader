@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from qobuz_downloader.domain import Album, Matched, Quality, Track, Unmatched
+from qobuz_downloader.domain import Album, Matched, Track, Unmatched
 from qobuz_downloader.match import LiveSpotify
 from qobuz_downloader.match._spotify import EmbedSpotify
 from qobuz_downloader.match._spotify_urls import parse_spotify
