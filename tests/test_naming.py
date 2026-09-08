@@ -51,3 +51,33 @@ def test_collapses_whitespace_and_trailing_dots():
     naming = Naming("{artist}", "{title}")
     path = naming.path_for(track)
     assert str(path) == "The Weeknd/Spaced Out.flac"
+
+
+def test_blank_template_uses_collection_as_directory():
+    naming = Naming("", "{tracknumber} - {title}")
+    path = naming.path_for(make_track(collection="Roadtrip Mix"))
+    assert str(path) == "Roadtrip Mix/03 - Blinding Lights.flac"
+
+
+def test_blank_template_without_collection_writes_to_root():
+    naming = Naming("", "{tracknumber} - {title}")
+    path = naming.path_for(make_track())
+    assert str(path) == "03 - Blinding Lights.flac"
+
+
+def test_whitespace_template_is_dynamic():
+    naming = Naming("   ", "{title}")
+    path = naming.path_for(make_track(collection="Mix"))
+    assert str(path) == "Mix/Blinding Lights.flac"
+
+
+def test_collection_placeholder_in_explicit_template():
+    naming = Naming("{collection}/{album}", "{title}")
+    path = naming.path_for(make_track(collection="Mix"))
+    assert str(path) == "Mix/After Hours/Blinding Lights.flac"
+
+
+def test_dynamic_collection_cleans_illegal_characters():
+    naming = Naming("", "{title}")
+    path = naming.path_for(make_track(collection='AC/DC: "Back" <in> Black?'))
+    assert str(path) == "AC_DC_ _Back_ _in_ Black_/Blinding Lights.flac"

@@ -193,7 +193,8 @@ def test_album_match_expands_to_tracks():
     result = matcher.match("https://open.spotify.com/album/sa1")
 
     assert isinstance(result, Matched)
-    assert result.tracks == album_tracks
+    assert [t.id for t in result.tracks] == ["q1"]
+    assert [t.collection for t in result.tracks] == ["After Hours"]
 
 
 def test_playlist_matches_track_by_track():
@@ -227,6 +228,94 @@ def test_playlist_matches_track_by_track():
     assert [t.id for t in result.tracks] == ["q1"]
     assert len(result.unmatched) == 1
     assert result.unmatched[0].title == "Unheard Noise"
+
+
+def test_playlist_numbers_tracks_by_position():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s1",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Another Hit",
+                        "subtitle": "The Weeknd",
+                        "duration": 210000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = FakeQobuz(
+        tracks_by_query={
+            "The Weeknd Blinding Lights": [
+                Track(
+                    id="q1",
+                    title="Blinding Lights",
+                    artist="The Weeknd",
+                    album="After Hours",
+                    track_number=1,
+                    duration_seconds=200,
+                )
+            ],
+            "The Weeknd Another Hit": [
+                Track(
+                    id="q2",
+                    title="Another Hit",
+                    artist="The Weeknd",
+                    album="Starboy",
+                    track_number=7,
+                    duration_seconds=210,
+                )
+            ],
+        }
+    )
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert [t.track_number for t in result.tracks] == [1, 2]
+    assert [t.collection for t in result.tracks] == ["Mix", "Mix"]
+    # album names stay untouched
+    assert [t.album for t in result.tracks] == ["After Hours", "Starboy"]
+
+
+def test_playlist_unmatched_track_does_not_shift_positions():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s1",
+                        "title": "Obscure One",
+                        "subtitle": "Nobody",
+                        "duration": 100000,
+                    },
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = FakeQobuz(tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]})
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert [t.track_number for t in result.tracks] == [2]
 
 
 def test_playlist_with_no_matches_is_unmatched():
@@ -342,3 +431,43 @@ def test_embed_spotify_raises_on_missing_entity():
 
     with pytest.raises(RuntimeError):
         embed.track("missing")
+
+
+def test_embed_spotify_playlist_name():
+    client = embed_client(
+        {"/playlist/": {"name": "Today's Top Hits", "trackList": []}}
+    )
+    embed = EmbedSpotify(http=client)
+
+    assert embed.playlist_name("p1") == "Today's Top Hits"
+
+
+def test_playlist_with_no_matches_is_unmatched_keeps_position_stamping():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Named Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s1",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Obscure One",
+                        "subtitle": "Nobody",
+                        "duration": 100000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = FakeQobuz(tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]})
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert result.tracks[0].collection == "Named Mix"

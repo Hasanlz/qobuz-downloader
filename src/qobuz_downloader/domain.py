@@ -18,6 +18,7 @@ class Track:
     album: str
     track_number: int | None = None
     duration_seconds: int | None = None
+    collection: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,26 @@ class Playlist:
 
 
 type Item = Track | Album | Artist | Playlist
+
+
+def renumber(tracks: list[Track]) -> list[Track]:
+    """Replace each track's album track number with its position in the list.
+
+    Used when the source is a playlist: the number reflects where the track
+    sits in the playlist, not where it sits on its original album.
+    """
+    return [
+        Track(
+            id=track.id,
+            title=track.title,
+            artist=track.artist,
+            album=track.album,
+            track_number=position,
+            duration_seconds=track.duration_seconds,
+            collection=track.collection,
+        )
+        for position, track in enumerate(tracks, start=1)
+    ]
 
 
 @dataclass(frozen=True, slots=True)

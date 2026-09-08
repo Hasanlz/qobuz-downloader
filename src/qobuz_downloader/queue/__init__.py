@@ -82,7 +82,7 @@ class InMemoryQueue(Queue):
         return len(failed)
 
 
-_COLUMNS = "id, title, artist, album, track_number, duration_seconds"
+_COLUMNS = "id, title, artist, album, track_number, duration_seconds, collection"
 
 
 class SqliteQueue(Queue):
@@ -98,8 +98,14 @@ class SqliteQueue(Queue):
             "track_number INTEGER, "
             "duration_seconds INTEGER, "
             "status TEXT NOT NULL, "
-            "reason TEXT)"
+            "reason TEXT, "
+            "collection TEXT)"
         )
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(tracks)")}
+        if "collection" not in columns:
+            # queue database from an older version
+            self._db.execute("ALTER TABLE tracks ADD COLUMN collection TEXT")
+            self._db.commit()
 
     def add(self, tracks: list[Track]) -> AddedReport:
         added: list[Track] = []
@@ -113,13 +119,13 @@ class SqliteQueue(Queue):
                     skipped.append(track)
                     continue
                 self._db.execute(
-                    "INSERT INTO tracks (id, title, artist, album, track_number, duration_seconds, status, reason)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO tracks (id, title, artist, album, track_number, duration_seconds, status, reason, collection)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     " ON CONFLICT(id) DO UPDATE SET status = excluded.status,"
                     " title = excluded.title, artist = excluded.artist,"
                     " album = excluded.album, track_number = excluded.track_number,"
                     " duration_seconds = excluded.duration_seconds,"
-                    " reason = excluded.reason",
+                    " reason = excluded.reason, collection = excluded.collection",
                     (
                         track.id,
                         track.title,
@@ -129,6 +135,7 @@ class SqliteQueue(Queue):
                         track.duration_seconds,
                         Status.PENDING.name,
                         None,
+                        track.collection,
                     ),
                 )
                 added.append(track)
@@ -148,6 +155,7 @@ class SqliteQueue(Queue):
                 album=row[3],
                 track_number=row[4],
                 duration_seconds=row[5],
+                collection=row[6],
             )
             for row in self._db.execute(query, parameters)
         ]

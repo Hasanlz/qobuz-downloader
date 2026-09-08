@@ -22,13 +22,23 @@ class Naming:
         values = {
             "artist": _clean(track.artist),
             "album": _clean(track.album),
+            "collection": _clean(track.collection or ""),
             "title": _clean(track.title),
             "tracknumber": (
                 f"{track.track_number:02d}" if track.track_number is not None else ""
             ),
         }
+        template = self.directory_template.strip()
+        if template:
+            try:
+                directory = template.format_map(values)
+            except KeyError as error:
+                raise ValueError(f"unknown placeholder: {error}") from error
+        else:
+            # dynamic default: the album or playlist the URL pointed at,
+            # nothing at all for single tracks
+            directory = values["collection"]
         try:
-            directory = self.directory_template.format_map(values)
             filename = self.filename_template.format_map(values)
         except KeyError as error:
             raise ValueError(f"unknown placeholder: {error}") from error

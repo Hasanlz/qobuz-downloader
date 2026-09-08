@@ -1,6 +1,8 @@
 import difflib
+import logging
 import re
 import unicodedata
+from dataclasses import replace
 
 from qobuz_downloader.domain import (
     Album,
@@ -14,6 +16,8 @@ from qobuz_downloader.match._interface import Matcher
 from qobuz_downloader.match._spotify import EmbedSpotify, Spotify, SpotifyMetadata
 from qobuz_downloader.match._spotify_urls import parse_spotify
 from qobuz_downloader.qobuz import Qobuz
+
+log = logging.getLogger(__name__)
 
 _THRESHOLD = 0.6
 _DURATION_EXACT = 2
@@ -105,15 +109,27 @@ class LiveSpotify(Matcher):
                 url=spotify_id,
                 reason=f"no Qobuz match for album {spotify_album.artist} - {spotify_album.title}",
             )
-        return Matched(self._qobuz.tracks(candidate))
+        # the matched Qobuz album is the collection; its own track numbers apply
+        return Matched(
+            [
+                replace(track, collection=candidate.title)
+                for track in self._qobuz.tracks(candidate)
+            ]
+        )
 
     def _match_playlist(self, spotify_id: str, limit: int | None = None) -> MatchResult:
         matched: list[Track] = []
         unmatched: list[UnmatchedTrack] = []
-        for payload in self._api.playlist_tracks(spotify_id, limit):
+        name = self._api.playlist_name(spotify_id)
+        log.info("matching playlist %s (%s) against Qobuz", spotify_id, name or "unnamed")
+        for position, payload in enumerate(
+            self._api.playlist_tracks(spotify_id, limit), start=1
+        ):
             spotify_track = _spotify_track(payload)
+            log.info("[%d] %s - %s", position, spotify_track.artist, spotify_track.title)
             candidate = self._best_track(spotify_track)
             if candidate is None:
+                log.warning("    no Qobuz match")
                 unmatched.append(
                     UnmatchedTrack(
                         title=spotify_track.title,
@@ -122,7 +138,11 @@ class LiveSpotify(Matcher):
                     )
                 )
             else:
-                matched.append(candidate)
+                log.info("    -> %s - %s", candidate.artist, candidate.title)
+                # playlist position, not the album track number
+                matched.append(
+                    replace(candidate, track_number=position, collection=name)
+                )
         if not matched:
             total = len(matched) + len(unmatched)
             return Unmatched(

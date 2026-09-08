@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
@@ -26,6 +27,8 @@ _QUALITIES = {
     "hires": Quality.HIRES_192,
 }
 
+log = logging.getLogger("qobuz_downloader")
+
 
 def _quality(value: str) -> Quality:
     if value not in _QUALITIES:
@@ -36,8 +39,10 @@ def _quality(value: str) -> Quality:
 def _collect(
     qobuz: LiveQobuz, matcher: LiveSpotify, url: str, limit: int | None = None
 ) -> tuple[list[Track], list[UnmatchedTrack]]:
+    log.info("collecting tracks from %s", url)
     if "qobuz.com" in url:
-        tracks = qobuz.tracks(qobuz.item(url))
+        item = qobuz.item(url)
+        tracks = qobuz.tracks(item)
         return (tracks[:limit] if limit is not None else tracks), []
     result = matcher.match(url, limit)
     if isinstance(result, Unmatched):
@@ -59,7 +64,13 @@ def main(argv: list[str] | None = None) -> int:
         default="hires",
         help="preferred quality ceiling: cd, hires96, hires (default: hires)",
     )
-    parser.add_argument("--dir-template", default="{artist}/{album}")
+    parser.add_argument(
+        "--dir-template",
+        default="",
+        help="directory layout; placeholders: {artist}, {album}, {collection}, {title},"
+        " {tracknumber} (default: album or playlist name; no subdirectory for a"
+        " single track)",
+    )
     parser.add_argument("--file-template", default="{tracknumber} - {title}")
     parser.add_argument(
         "--db", default=None, help="queue database path (default: <dir>/.queue.sqlite3)"
@@ -75,7 +86,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="do not save .lrc lyric files alongside tracks",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="log every match decision and download retry to stderr",
+    )
     args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     try:
         preferred = _quality(args.quality)

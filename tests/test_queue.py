@@ -54,3 +54,42 @@ def test_queue_survives_across_instances(tmp_path):
     third = SqliteQueue(tmp_path / "queue.sqlite3")
     assert third.pending() == []
     third.close()
+
+
+def test_collection_survives_round_trip(tmp_path):
+    queue = SqliteQueue(tmp_path / "queue.sqlite3")
+    track = Track(
+        id="t1", title="Song", artist="Artist", album="Album", collection="Roadtrip Mix"
+    )
+    queue.add([track])
+    assert queue.pending() == [track]
+    queue.close()
+
+
+def test_old_database_without_collection_column_migrates(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "queue.sqlite3"
+    db = sqlite3.connect(path)
+    db.execute(
+        "CREATE TABLE tracks ("
+        "id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL,"
+        " album TEXT NOT NULL, track_number INTEGER, duration_seconds INTEGER,"
+        " status TEXT NOT NULL, reason TEXT)"
+    )
+    db.execute(
+        "INSERT INTO tracks VALUES ('t1', 'Song', 'Artist', 'Album', 1, 180, 'PENDING', NULL)"
+    )
+    db.commit()
+    db.close()
+
+    queue = SqliteQueue(path)
+
+    assert [t.id for t in queue.pending()] == ["t1"]
+    track = make_track()
+    track = Track(
+        id="t2", title="S2", artist="A2", album="B2", collection="Playlist X"
+    )
+    queue.add([track])
+    assert queue.pending()[1].collection == "Playlist X"
+    queue.close()

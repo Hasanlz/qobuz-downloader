@@ -59,16 +59,22 @@ Qobuz and Spotify URLs can be mixed in one command.
 
 ### Examples
 
-Download an album at the best available quality:
+Download an album at the best available quality (files land in `./Album Name/`):
 
 ```bash
 qobuz-downloader https://play.qobuz.com/album/0060254746222 --dir ~/Music
 ```
 
-Download a 1000-track Spotify playlist:
+Download a 1000-track Spotify playlist (files land in `./Playlist Name/`, numbered by playlist position):
 
 ```bash
 qobuz-downloader https://open.spotify.com/playlist/6Nq4BLzd6vTMIye1kkUhBN --dir ~/Music
+```
+
+Download a single track (goes straight into `--dir`, no subdirectory):
+
+```bash
+qobuz-downloader https://open.qobuz.com/track/25273041 --dir ~/Music
 ```
 
 Test the waters first — fetch and download only the first 3 tracks:
@@ -86,7 +92,7 @@ qobuz-downloader https://play.qobuz.com/album/0060254746222 --quality cd
 Custom file layout:
 
 ```bash
-qobuz-downloader URL --dir-template "{artist}/{year} {album}" --file-template "{tracknumber}. {title}"
+qobuz-downloader URL --dir-template "{artist}/{album}" --file-template "{tracknumber}. {title}"
 ```
 
 ### Options
@@ -95,13 +101,17 @@ qobuz-downloader URL --dir-template "{artist}/{year} {album}" --file-template "{
 |---|---|---|
 | `--dir` | `.` | download directory (also where the queue database lives) |
 | `--quality` | `hires` | preferred quality ceiling: `cd`, `hires96`, `hires` |
-| `--dir-template` | `{artist}/{album}` | directory layout; placeholders: `{artist}`, `{album}`, `{title}`, `{tracknumber}` |
-| `--file-template` | `{tracknumber} - {title}` | filename pattern; must not contain path separators |
+| `--dir-template` | *dynamic* | directory layout; placeholders: `{artist}`, `{album}`, `{collection}`, `{title}`, `{tracknumber}`. Empty by default: albums get a directory named after the album, playlists after the playlist, single tracks go straight into `--dir` |
+| `--file-template` | `{tracknumber} - {title}` | filename pattern; must not contain path separators. For playlists the number is the position in the playlist, for albums the position on the album |
 | `--limit` | none | queue at most this many tracks per URL |
 | `--db` | `<dir>/.queue.sqlite3` | queue database location |
 | `--no-lyrics` | off | skip saving `.lrc` lyric files |
 
 *Omit all URLs to resume whatever is pending in the queue database.*
+
+### Progress output
+
+Everything goes to the terminal: summary lines on stdout, progress and warnings on stderr. While matching a playlist you see each track as it is processed (`[7] Artist - Title` and what it matched to); downloads print `done:`/`failed:` per track. Pass `--verbose` for details — every API page fetch and download retry.
 
 ## Lyrics
 

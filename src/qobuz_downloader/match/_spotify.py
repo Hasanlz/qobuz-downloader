@@ -12,6 +12,8 @@ class SpotifyMetadata(Protocol):
 
     def album(self, spotify_id: str) -> dict[str, Any]: ...
 
+    def playlist_name(self, spotify_id: str) -> str: ...
+
     def playlist_tracks(
         self, spotify_id: str, limit: int | None = None
     ) -> list[dict[str, Any]]: ...
@@ -47,6 +49,9 @@ class EmbedSpotify:
             "artists": artists,
             "total_tracks": len(track_list),
         }
+
+    def playlist_name(self, spotify_id: str) -> str:
+        return self._entity("playlist", spotify_id).get("name", "")
 
     def playlist_tracks(
         self, spotify_id: str, limit: int | None = None
@@ -112,6 +117,11 @@ class Spotify:
             items.extend(payload["items"])
             url = payload.get("next")
         return items
+
+    def playlist_name(self, spotify_id: str) -> str:
+        return self._get(
+            f"https://api.spotify.com/v1/playlists/{spotify_id}?fields=name"
+        ).get("name", "")
 
     def playlist_tracks(self, spotify_id: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []

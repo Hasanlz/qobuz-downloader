@@ -1,5 +1,5 @@
 import qobuz_downloader
-from qobuz_downloader.domain import Quality, Track
+from qobuz_downloader.domain import Quality, Track, renumber
 from qobuz_downloader.queue import InMemoryQueue
 
 
@@ -9,6 +9,19 @@ def test_version():
 
 def test_quality_ladder_is_ordered():
     assert Quality.LOSSY < Quality.CD < Quality.HIRES_96 < Quality.HIRES_192
+
+
+def test_renumber_assigns_playlist_positions():
+    tracks = [
+        Track(id="t1", title="A", artist="X", album="Album One", track_number=4),
+        Track(id="t2", title="B", artist="Y", album="Album Two", track_number=7),
+    ]
+
+    renumbered = renumber(tracks)
+
+    assert [t.track_number for t in renumbered] == [1, 2]
+    assert [t.album for t in renumbered] == ["Album One", "Album Two"]
+    assert [t.id for t in renumbered] == ["t1", "t2"]
 
 
 def test_in_memory_queue_dedupes_completed_tracks():

@@ -56,6 +56,13 @@ class PublicSpotify(SpotifyMetadata):
             "total_tracks": len(track_batches),
         }
 
+    def playlist_name(self, spotify_id: str) -> str:
+        from spotapi import PublicPlaylist
+
+        info = PublicPlaylist(spotify_id).get_playlist_info(limit=1)
+        playlist = (info.get("data") or {}).get("playlistV2") or {}
+        return playlist.get("name", "")
+
     def playlist_tracks(
         self, spotify_id: str, limit: int | None = None
     ) -> list[dict[str, Any]]:

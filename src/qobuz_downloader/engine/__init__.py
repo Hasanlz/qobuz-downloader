@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -10,6 +11,8 @@ from qobuz_downloader.engine._source import ByteSource, HttpByteSource
 from qobuz_downloader.lyrics import LyricsSource
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.qobuz import Qobuz
+
+log = logging.getLogger(__name__)
 
 _EXTENSIONS = {
     Quality.LOSSY: ".mp3",
@@ -46,7 +49,8 @@ class Engine:
         path = self._naming.path_for(track, extension=_EXTENSIONS[requested])
         partial = path.with_suffix(path.suffix + ".part")
         last_error = ""
-        for delay in (0.0, *self._retry_delays):
+        attempts = (0.0, *self._retry_delays)
+        for attempt, delay in enumerate(attempts):
             if delay:
                 time.sleep(delay)
             try:
@@ -63,6 +67,14 @@ class Engine:
                 )
             except Exception as error:
                 last_error = str(error) or type(error).__name__
+                remaining = len(attempts) - attempt - 1
+                if remaining:
+                    log.warning(
+                        "retrying %s: %s (%d attempt(s) left)",
+                        track.title,
+                        last_error,
+                        remaining,
+                    )
         return Failed(reason=last_error)
 
     def _attempt(

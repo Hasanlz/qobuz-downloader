@@ -12,6 +12,7 @@ from qobuz_downloader.domain import (
     Quality,
     Stream,
     Track,
+    renumber,
 )
 from qobuz_downloader.qobuz._interface import Qobuz
 from qobuz_downloader.qobuz._secrets import fetch_app_credentials
@@ -79,7 +80,9 @@ class LiveQobuz(Qobuz):
         if kind == "album":
             payload = self._call("album/get", album_id=item_id)
             self._cache_tracks(
-                str(payload["id"]), payload.get("tracks", {}).get("items", [])
+                str(payload["id"]),
+                payload.get("tracks", {}).get("items", []),
+                collection=payload.get("title", ""),
             )
             return Album(
                 id=str(payload["id"]),
@@ -104,15 +107,19 @@ class LiveQobuz(Qobuz):
             return list(cached)
         if isinstance(item, Album):
             payload = self._call("album/get", album_id=item.id)
-            self._cache_tracks(item.id, payload.get("tracks", {}).get("items", []))
+            self._cache_tracks(
+                item.id, payload.get("tracks", {}).get("items", []), collection=item.title
+            )
         elif isinstance(item, Playlist):
-            self._playlist(item.id)
+            self._playlist(item.id, collection=item.title)
         elif isinstance(item, Artist):
             collected: list[Track] = []
             for album_payload in self._artist_albums(item.id):
                 album = self._call("album/get", album_id=str(album_payload["id"]))
                 self._cache_tracks(
-                    str(album["id"]), album.get("tracks", {}).get("items", [])
+                    str(album["id"]),
+                    album.get("tracks", {}).get("items", []),
+                    collection=album.get("title", ""),
                 )
                 collected.extend(self._tracks[str(album["id"])])
             self._tracks[item.id] = collected
@@ -168,7 +175,9 @@ class LiveQobuz(Qobuz):
         response.raise_for_status()
         return response.json()
 
-    def _playlist(self, playlist_id: str) -> dict[str, Any]:
+    def _playlist(
+        self, playlist_id: str, collection: str | None = None
+    ) -> dict[str, Any]:
         items: list[dict[str, Any]] = []
         payload: dict[str, Any] = {}
         offset = 0
@@ -185,7 +194,11 @@ class LiveQobuz(Qobuz):
             offset += _PAGE_SIZE
             if not batch or len(items) >= payload.get("tracks_count", 0):
                 break
-        self._cache_tracks(str(payload["id"]), items)
+        if collection is None:
+            collection = payload.get("name", "")
+        self._tracks[str(payload["id"])] = renumber(
+            self._track(item, collection=collection) for item in items
+        )
         return payload
 
     def _artist_albums(self, artist_id: str) -> list[dict[str, Any]]:
@@ -206,14 +219,20 @@ class LiveQobuz(Qobuz):
                 break
         return albums
 
-    def _cache_tracks(self, key: str, payloads: list[dict[str, Any]]) -> None:
+    def _cache_tracks(
+        self,
+        key: str,
+        payloads: list[dict[str, Any]],
+        collection: str | None = None,
+    ) -> None:
         for payload in payloads:
             self._raw[str(payload["id"])] = payload
         self._tracks.setdefault(key, []).extend(
-            self._track(payload) for payload in payloads
+            self._track(payload, collection=collection) for payload in payloads
         )
 
-    def _track(self, payload: dict[str, Any]) -> Track:
+    @staticmethod
+    def _track(payload: dict[str, Any], collection: str | None = None) -> Track:
         album = payload.get("album") or {}
         artist = album.get("artist") or payload.get("performer") or {}
         return Track(
@@ -223,6 +242,7 @@ class LiveQobuz(Qobuz):
             album=album.get("title", ""),
             track_number=payload.get("track_number"),
             duration_seconds=payload.get("duration"),
+            collection=collection,
         )
 
     def _working_secret(self, secrets: list[str]) -> str:
