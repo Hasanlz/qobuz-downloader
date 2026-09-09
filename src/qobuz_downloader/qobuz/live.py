@@ -42,7 +42,11 @@ def _display_name(value: Any) -> str:
 
 class LiveQobuz(Qobuz):
     def __init__(self) -> None:
-        self._http = httpx.Client(headers=dict(_HEADERS), follow_redirects=True)
+        self._http = httpx.Client(
+            headers=dict(_HEADERS),
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0, read=60.0),
+        )
         self._secret = ""
         self._tracks: dict[str, list[Track]] = {}
         self._raw: dict[str, dict[str, Any]] = {}
@@ -171,9 +175,15 @@ class LiveQobuz(Qobuz):
         ]
 
     def _call(self, endpoint: str, **params: Any) -> dict[str, Any]:
-        response = self._http.get(_BASE + endpoint, params=params)
-        response.raise_for_status()
-        return response.json()
+        last_error: Exception | None = None
+        for _ in range(3):
+            try:
+                response = self._http.get(_BASE + endpoint, params=params)
+                response.raise_for_status()
+                return response.json()
+            except (httpx.TimeoutException, httpx.TransportError) as error:
+                last_error = error
+        raise RuntimeError(f"{endpoint} failed after 3 attempts: {last_error}")
 
     def _playlist(
         self, playlist_id: str, collection: str | None = None
