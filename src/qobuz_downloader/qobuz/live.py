@@ -227,12 +227,18 @@ class LiveQobuz(Qobuz):
     ) -> None:
         for payload in payloads:
             self._raw[str(payload["id"])] = payload
+        total = len(payloads)
         self._tracks.setdefault(key, []).extend(
-            self._track(payload, collection=collection) for payload in payloads
+            self._track(payload, collection=collection, track_total=total)
+            for payload in payloads
         )
 
     @staticmethod
-    def _track(payload: dict[str, Any], collection: str | None = None) -> Track:
+    def _track(
+        payload: dict[str, Any],
+        collection: str | None = None,
+        track_total: int | None = None,
+    ) -> Track:
         album = payload.get("album") or {}
         artist = album.get("artist") or payload.get("performer") or {}
         return Track(
@@ -243,6 +249,7 @@ class LiveQobuz(Qobuz):
             track_number=payload.get("track_number"),
             duration_seconds=payload.get("duration"),
             collection=collection,
+            track_total=track_total,
         )
 
     def _working_secret(self, secrets: list[str]) -> str:

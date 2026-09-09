@@ -81,3 +81,27 @@ def test_dynamic_collection_cleans_illegal_characters():
     naming = Naming("", "{title}")
     path = naming.path_for(make_track(collection='AC/DC: "Back" <in> Black?'))
     assert str(path) == "AC_DC_ _Back_ _in_ Black_/Blinding Lights.flac"
+
+
+def test_tracknumber_pads_to_three_digits_for_200_track_collection():
+    naming = Naming("{artist}", "{tracknumber}. {title}")
+    path = naming.path_for(make_track(track_number=4, track_total=200))
+    assert str(path) == "The Weeknd/004. Blinding Lights.flac"
+
+
+def test_tracknumber_pads_to_two_digits_for_small_collections():
+    naming = Naming("{artist}", "{tracknumber}")
+    path = naming.path_for(make_track(track_number=4, track_total=17))
+    assert str(path) == "The Weeknd/04.flac"
+
+
+def test_tracknumber_pads_to_four_digits_for_1000_track_collection():
+    naming = Naming("{artist}", "{tracknumber}")
+    path = naming.path_for(make_track(track_number=12, track_total=1200))
+    assert str(path) == "The Weeknd/0012.flac"
+
+
+def test_tracknumber_without_total_stays_two_digits():
+    naming = Naming("{artist}", "{tracknumber}")
+    path = naming.path_for(make_track(track_number=4))
+    assert str(path) == "The Weeknd/04.flac"

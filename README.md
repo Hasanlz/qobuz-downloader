@@ -104,7 +104,7 @@ qobuz-downloader URL --dir-template "{artist}/{album}" --file-template "{tracknu
 | `--dir` | `.` | download directory (also where the queue database lives) |
 | `--quality` | `hires` | preferred quality ceiling: `cd`, `hires96`, `hires` |
 | `--dir-template` | *dynamic* | directory layout; placeholders: `{artist}`, `{album}`, `{collection}`, `{title}`, `{tracknumber}`. Empty by default: albums get a directory named after the album, playlists after the playlist, single tracks go straight into `--dir` |
-| `--file-template` | `{tracknumber} - {title}` | filename pattern; must not contain path separators. For playlists the number is the position in the playlist, for albums the position on the album |
+| `--file-template` | `{tracknumber} - {title}` | filename pattern; must not contain path separators. For playlists the number is the position in the playlist, for albums the position on the album. Numbers are zero-padded to the collection's size: a 200-track playlist numbers `001`–`200`, a 20-track album `01`–`20` |
 | `--limit` | none | download at most this many tracks this run; everything is still matched and queued, and re-running continues with the rest |
 | `--db` | `<dir>/.queue.sqlite3` | queue database location |
 | `--no-lyrics` | off | skip saving `.lrc` lyric files |

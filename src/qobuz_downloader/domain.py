@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -19,6 +20,7 @@ class Track:
     track_number: int | None = None
     duration_seconds: int | None = None
     collection: str | None = None
+    track_total: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +46,14 @@ class Playlist:
 type Item = Track | Album | Artist | Playlist
 
 
-def renumber(tracks: list[Track]) -> list[Track]:
+def renumber(tracks: Iterable[Track]) -> list[Track]:
     """Replace each track's album track number with its position in the list.
 
     Used when the source is a playlist: the number reflects where the track
     sits in the playlist, not where it sits on its original album.
     """
+    tracks = list(tracks)
+    total = len(tracks)
     return [
         Track(
             id=track.id,
@@ -59,6 +63,7 @@ def renumber(tracks: list[Track]) -> list[Track]:
             track_number=position,
             duration_seconds=track.duration_seconds,
             collection=track.collection,
+            track_total=total,
         )
         for position, track in enumerate(tracks, start=1)
     ]

@@ -283,8 +283,41 @@ def test_playlist_numbers_tracks_by_position():
     assert isinstance(result, Matched)
     assert [t.track_number for t in result.tracks] == [1, 2]
     assert [t.collection for t in result.tracks] == ["Mix", "Mix"]
+    assert [t.track_total for t in result.tracks] == [2, 2]
     # album names stay untouched
     assert [t.album for t in result.tracks] == ["After Hours", "Starboy"]
+
+
+def test_playlist_track_total_counts_unmatched_tracks_too():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s1",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Unheard Noise",
+                        "subtitle": "Ghost Artist",
+                        "duration": 90000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = FakeQobuz(tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]})
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    # total is the playlist size, not the matched count
+    assert [t.track_total for t in result.tracks] == [2]
 
 
 def test_playlist_unmatched_track_does_not_shift_positions():

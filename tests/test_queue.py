@@ -57,7 +57,12 @@ def test_queue_survives_across_instances(tmp_path):
 def test_collection_survives_round_trip(tmp_path):
     queue = SqliteQueue(tmp_path / "queue.sqlite3")
     track = Track(
-        id="t1", title="Song", artist="Artist", album="Album", collection="Roadtrip Mix"
+        id="t1",
+        title="Song",
+        artist="Artist",
+        album="Album",
+        collection="Roadtrip Mix",
+        track_total=200,
     )
     queue.add([track])
     assert queue.pending() == [track]

@@ -110,10 +110,12 @@ class LiveSpotify(Matcher):
                 reason=f"no Qobuz match for album {spotify_album.artist} - {spotify_album.title}",
             )
         # the matched Qobuz album is the collection; its own track numbers apply
+        tracks = self._qobuz.tracks(candidate)
+        total = candidate.tracks_count or len(tracks)
         return Matched(
             [
-                replace(track, collection=candidate.title)
-                for track in self._qobuz.tracks(candidate)
+                replace(track, collection=candidate.title, track_total=total)
+                for track in tracks
             ]
         )
 
@@ -122,9 +124,9 @@ class LiveSpotify(Matcher):
         unmatched: list[UnmatchedTrack] = []
         name = self._api.playlist_name(spotify_id)
         log.info("matching playlist %s (%s) against Qobuz", spotify_id, name or "unnamed")
-        for position, payload in enumerate(
-            self._api.playlist_tracks(spotify_id), start=1
-        ):
+        payloads = self._api.playlist_tracks(spotify_id)
+        total = len(payloads)
+        for position, payload in enumerate(payloads, start=1):
             spotify_track = _spotify_track(payload)
             log.info("[%d] %s - %s", position, spotify_track.artist, spotify_track.title)
             candidate = self._best_track(spotify_track)
@@ -141,7 +143,12 @@ class LiveSpotify(Matcher):
                 log.info("    -> %s - %s", candidate.artist, candidate.title)
                 # playlist position, not the album track number
                 matched.append(
-                    replace(candidate, track_number=position, collection=name)
+                    replace(
+                        candidate,
+                        track_number=position,
+                        collection=name,
+                        track_total=total,
+                    )
                 )
         if not matched:
             total = len(matched) + len(unmatched)

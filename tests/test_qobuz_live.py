@@ -57,6 +57,7 @@ def test_playlist_tracks_are_numbered_by_position():
 
     assert [t.track_number for t in tracks] == [1, 2]
     assert [t.album for t in tracks] == ["Machine Head", "Machine Head"]
+    assert [t.track_total for t in tracks] == [2, 2]
 
 
 def test_playlist_tracks_carry_playlist_name_as_collection():
@@ -74,6 +75,7 @@ def test_album_tracks_keep_album_numbers():
 
     assert [t.track_number for t in tracks] == [6, 4]
     assert {t.collection for t in tracks} == {"Machine Head"}
+    assert [t.track_total for t in tracks] == [2, 2]
 
 
 def test_single_track_has_no_collection():

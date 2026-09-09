@@ -12,6 +12,13 @@ def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", cleaned).rstrip(" .")
 
 
+def _tracknumber(track: Track) -> str:
+    if track.track_number is None:
+        return ""
+    digits = len(str(track.track_total)) if track.track_total else 2
+    return f"{track.track_number:0{max(digits, 2)}d}"
+
+
 @dataclass(frozen=True, slots=True)
 class Naming:
     directory_template: str
@@ -24,9 +31,7 @@ class Naming:
             "album": _clean(track.album),
             "collection": _clean(track.collection or ""),
             "title": _clean(track.title),
-            "tracknumber": (
-                f"{track.track_number:02d}" if track.track_number is not None else ""
-            ),
+            "tracknumber": _tracknumber(track),
         }
         template = self.directory_template.strip()
         if template:
