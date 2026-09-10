@@ -21,3 +21,6 @@ class Qobuz(ABC):
 
     @abstractmethod
     def search_albums(self, query: str, limit: int) -> list[Album]: ...
+
+    @abstractmethod
+    def cover_url(self, track: Track) -> str | None: ...

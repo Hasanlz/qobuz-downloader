@@ -174,6 +174,14 @@ class LiveQobuz(Qobuz):
             for item in items
         ]
 
+    def cover_url(self, track: Track) -> str | None:
+        raw = self._raw.get(track.id)
+        if raw is None:
+            raw = self._call("track/get", track_id=track.id)
+            self._raw[track.id] = raw
+        image = (raw.get("album") or {}).get("image") or {}
+        return image.get("large") or image.get("medium") or image.get("small")
+
     def _call(self, endpoint: str, **params: Any) -> dict[str, Any]:
         last_error: Exception | None = None
         for _ in range(3):

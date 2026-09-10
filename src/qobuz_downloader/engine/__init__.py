@@ -8,6 +8,7 @@ from mutagen import MutagenError
 from mutagen.flac import FLAC
 
 from qobuz_downloader.domain import Complete, Failed, Outcome, Quality, Stream, Track
+from qobuz_downloader.engine import _tags
 from qobuz_downloader.engine._source import ByteSource, HttpByteSource
 from qobuz_downloader.lyrics import LyricsSource
 from qobuz_downloader.naming import Naming
@@ -61,7 +62,7 @@ class Engine:
                 stream = self._attempt(track, requested, partial)
                 self._validate(partial)
                 partial.replace(path)
-                return self._maybe_upgrade(
+                complete = self._maybe_upgrade(
                     Complete(
                         path=path,
                         quality=stream.quality,
@@ -73,6 +74,8 @@ class Engine:
                     track,
                     path,
                 )
+                self._apply_tags(track, path)
+                return complete
             except Exception as error:
                 last_error = str(error) or type(error).__name__
                 remaining = len(attempts) - attempt - 1
@@ -175,6 +178,13 @@ class Engine:
         except MutagenError as error:
             partial.unlink(missing_ok=True)
             raise ValueError(f"corrupt FLAC file: {error}") from error
+
+    def _apply_tags(self, track: Track, path: Path) -> None:
+        """Tag the final file; never fail a finished download over metadata."""
+        try:
+            _tags.apply(path, track, self._qobuz.cover_url(track), self._source)
+        except Exception as error:
+            log.warning("tagging skipped for %s: %s", track.title, error)
 
     def _write_lyrics(self, track: Track, path: Path) -> bool:
         if self._lyrics is None:

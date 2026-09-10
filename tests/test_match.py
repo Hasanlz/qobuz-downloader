@@ -34,6 +34,9 @@ class FakeQobuz(Qobuz):
     def search_albums(self, query, limit):
         return list(self.albums_by_query.get(query, []))[:limit]
 
+    def cover_url(self, track):
+        return None
+
 
 QOBUZ_TRACK = Track(
     id="q1",

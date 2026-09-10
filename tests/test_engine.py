@@ -1,7 +1,13 @@
+import io
 import struct
+
+from mutagen import MutagenError
+from mutagen.flac import FLAC
 
 from qobuz_downloader.domain import Complete, Failed, Quality, Stream, Track
 from qobuz_downloader.engine import Engine
+from mutagen.flac import FLAC
+
 from qobuz_downloader.engine._source import ByteResponse, ByteSource
 from qobuz_downloader.lyrics import LyricsSource
 from qobuz_downloader.naming import Naming
@@ -20,11 +26,29 @@ def _flac_bytes(size: int = 0, sample_rate: int = 44100, bit_depth: int = 16) ->
     return data + b"\x00" * max(0, size - len(data))
 
 
+
+def _same_audio(path, content: bytes) -> bool:
+    """Tagging rewrites metadata blocks, so compare what actually matters."""
+    on_disk = path.read_bytes()
+    if on_disk == content:
+        return True
+    try:
+        wanted = FLAC(fileobj=io.BytesIO(content))
+        got = FLAC(str(path))
+    except MutagenError:
+        return False
+    return (
+        got.info.sample_rate == wanted.info.sample_rate
+        and got.info.bits_per_sample == wanted.info.bits_per_sample
+        and got.info.total_samples == wanted.info.total_samples
+    )
+
 class FakeQobuz(Qobuz):
     def __init__(self, qualities, delivered=(16, 44.1)):
         self._qualities = list(qualities)
         self._delivered = delivered
         self.stream_calls = 0
+        self.cover_urls: dict[str, str | None] = {}
 
     def item(self, url):
         raise NotImplementedError
@@ -37,6 +61,9 @@ class FakeQobuz(Qobuz):
 
     def search_albums(self, query, limit):
         return []
+
+    def cover_url(self, track):
+        return self.cover_urls.get(track.id)
 
     def qualities(self, track):
         return list(self._qualities)
@@ -94,8 +121,14 @@ class RoutingSource(FakeByteSource):
     def __init__(self, qobuz_content, tidal_content):
         super().__init__(qobuz_content)
         self.tidal_content = tidal_content
+        self.covers: dict[str, bytes] = {}
 
     def stream(self, url, start):
+        if url in self.covers:
+            self.calls.append(start)
+            return ByteResponse(
+                status=200, length=len(self.covers[url]), chunks=iter([self.covers[url]])
+            )
         if url.startswith("https://tidal.test"):
             self.calls.append(start)
             return ByteResponse(
@@ -161,7 +194,7 @@ def test_happy_path_downloads_and_renames(tmp_path):
     assert outcome.quality == Quality.HIRES_192
     assert not outcome.fell_back
     final = target / "Artist/01 - Song.flac"
-    assert final.read_bytes() == content
+    assert _same_audio(final, content)
     assert not final.with_suffix(".flac.part").exists()
     assert source.calls == [0]
     assert qobuz.stream_calls == 1
@@ -202,7 +235,7 @@ def test_resumes_from_partial_after_mid_stream_failure(tmp_path):
     assert source.calls == [0, 10]
     assert qobuz.stream_calls == 2
     final = target / "Artist/01 - Song.flac"
-    assert final.read_bytes() == content
+    assert _same_audio(final, content)
     assert not final.with_suffix(".flac.part").exists()
 
 
@@ -216,7 +249,7 @@ def test_restarts_when_server_ignores_range(tmp_path):
 
     assert isinstance(outcome, Complete)
     assert source.calls == [0, 5, 0]
-    assert (target / "Artist/01 - Song.flac").read_bytes() == content
+    assert _same_audio(target / "Artist/01 - Song.flac", content)
 
 
 def test_corrupt_file_exhausts_retries_and_cleans_up(tmp_path):
@@ -313,7 +346,7 @@ def test_tidal_upgrade_replaces_file_when_higher(tmp_path):
     assert outcome.sampling_rate == 96.0
     assert not outcome.fell_back
     final = target / "Artist/01 - Song.flac"
-    assert final.read_bytes() == tidal_content
+    assert _same_audio(final, tidal_content)
     assert not final.with_suffix(".flac.tidal.part").exists()
     assert tidal.lookups == ["t1"]
     assert tidal.stream_calls == ["9"]
@@ -330,7 +363,7 @@ def test_tidal_upgrade_keeps_qobuz_when_not_higher(tmp_path):
 
     assert isinstance(outcome, Complete)
     assert not outcome.upgraded
-    assert (target / "Artist/01 - Song.flac").read_bytes() == qobuz_content
+    assert _same_audio(target / "Artist/01 - Song.flac", qobuz_content)
     assert not (target / "Artist/01 - Song.flac.tidal.part").exists()
 
 
@@ -359,7 +392,7 @@ def test_tidal_failure_never_fails_the_track(tmp_path):
 
     assert isinstance(outcome, Complete)
     assert not outcome.upgraded
-    assert (target / "Artist/01 - Song.flac").read_bytes() == qobuz_content
+    assert _same_audio(target / "Artist/01 - Song.flac", qobuz_content)
 
 
 def test_tidal_corrupt_flac_cleans_up_part(tmp_path):
@@ -373,7 +406,7 @@ def test_tidal_corrupt_flac_cleans_up_part(tmp_path):
 
     assert isinstance(outcome, Complete)
     assert not outcome.upgraded
-    assert (target / "Artist/01 - Song.flac").read_bytes() == qobuz_content
+    assert _same_audio(target / "Artist/01 - Song.flac", qobuz_content)
     assert not (target / "Artist/01 - Song.flac.tidal.part").exists()
 
 
@@ -399,3 +432,64 @@ def test_no_tidal_client_never_looks_up(tmp_path):
 
     assert isinstance(outcome, Complete)
     assert not outcome.upgraded
+
+
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d4944415478da63fcffff3f0300050201aa2f5c34"
+    "0000000049454e44ae426082"
+)
+
+
+def test_download_writes_tags_and_cover(tmp_path):
+    qobuz = FakeQobuz([Quality.CD])
+    qobuz.cover_urls["t1"] = "https://covers.test/t1.png"
+    source = RoutingSource(_flac_bytes(512), b"")
+    source.covers["https://covers.test/t1.png"] = _PNG
+    engine, target = make_engine(qobuz, source, tmp_path)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    audio = FLAC(str(target / "Artist/01 - Song.flac"))
+    assert audio["title"] == ["Song"]
+    assert audio["artist"] == ["Artist"]
+    assert audio["album"] == ["Album"]
+    assert audio["tracknumber"] == ["1"]
+    assert len(audio.pictures) == 1
+    assert audio.pictures[0].mime == "image/png"
+    assert audio.pictures[0].type == 3
+    assert audio.pictures[0].data == _PNG
+
+
+def test_tagging_failure_never_fails_the_track(tmp_path):
+    qobuz = FakeQobuz([Quality.CD])
+    qobuz.cover_urls["t1"] = "https://covers.test/t1.png"
+    source = RoutingSource(_flac_bytes(512), b"")
+    source.covers["https://covers.test/t1.png"] = b"not an image"
+    engine, target = make_engine(qobuz, source, tmp_path)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    audio = FLAC(str(target / "Artist/01 - Song.flac"))
+    assert audio["title"] == ["Song"]
+    assert not audio.pictures
+
+
+def test_tidal_upgrade_keeps_tags_on_replaced_file(tmp_path):
+    qobuz = FakeQobuz([Quality.CD], delivered=(24, 44.1))
+    tidal_content = _flac_bytes(2048, sample_rate=96000, bit_depth=24)
+    source = RoutingSource(_flac_bytes(512), tidal_content)
+    source.covers["https://covers.test/t1.png"] = _PNG
+    qobuz.cover_urls["t1"] = "https://covers.test/t1.png"
+    tidal = FakeTidal()
+    engine, target = make_engine(qobuz, source, tmp_path, tidal=tidal)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert outcome.upgraded
+    audio = FLAC(str(target / "Artist/01 - Song.flac"))
+    assert audio["title"] == ["Song"]
+    assert len(audio.pictures) == 1

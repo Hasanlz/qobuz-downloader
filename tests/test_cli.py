@@ -31,6 +31,9 @@ class FakeQobuz(Qobuz):
     def search_albums(self, query, limit):
         raise NotImplementedError
 
+    def cover_url(self, track):
+        return None
+
 
 class FakeEngine:
     def __init__(self, *args, **kwargs):
