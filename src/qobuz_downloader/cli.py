@@ -19,6 +19,7 @@ from qobuz_downloader.match import LiveSpotify, make_matcher
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.queue import SqliteQueue
 from qobuz_downloader.qobuz import LiveQobuz
+from qobuz_downloader.tidal import LiveTidal
 
 _QUALITIES = {
     "cd": Quality.CD,
@@ -85,6 +86,13 @@ def main(argv: list[str] | None = None) -> int:
         help="do not save .lrc lyric files alongside tracks",
     )
     parser.add_argument(
+        "--tidal",
+        action="store_true",
+        help="replace the Qobuz file with a Tidal copy when Tidal has higher"
+        " quality (fires only for tracks Qobuz delivered at 24-bit/44.1 or"
+        " /48; needs a one-time Tidal login, a paid subscription for HiRes)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="log every match decision and download retry to stderr",
@@ -127,10 +135,24 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(args.dir).expanduser()
     naming = Naming(args.dir_template, args.file_template, root=root)
+
+    tidal = None
+    if args.tidal:
+        tidal = LiveTidal()
+        try:
+            tidal.ensure_login()
+        except (RuntimeError, httpx.HTTPError) as error:
+            print(
+                f"tidal login failed: {error} — continuing without Tidal upgrades",
+                file=sys.stderr,
+            )
+            tidal = None
+
     engine = Engine(
         qobuz,
         naming,
         lyrics=None if args.no_lyrics else LrcLib(),
+        tidal=tidal,
     )
     queue = SqliteQueue(Path(args.db) if args.db else root / ".queue.sqlite3")
     matcher = make_matcher(qobuz)
@@ -176,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
             consecutive_failures = 0
             specs = f"{outcome.bit_depth}/{outcome.sampling_rate:g}" if outcome.sampling_rate else outcome.quality.name.lower()
             note = f", fell back from {preferred.name.lower()}" if outcome.fell_back else ""
+            if outcome.upgraded:
+                note += ", upgraded from Tidal"
             print(f"done: {track.artist} - {track.title} ({specs}{note})")
         else:
             failures += 1

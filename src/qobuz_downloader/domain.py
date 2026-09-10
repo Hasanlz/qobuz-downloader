@@ -85,6 +85,7 @@ class Complete:
     sampling_rate: float | None = None
     bit_depth: int | None = None
     lyrics_saved: bool = False
+    upgraded: bool = False
 
 
 @dataclass(frozen=True, slots=True)

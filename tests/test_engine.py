@@ -6,22 +6,24 @@ from qobuz_downloader.engine._source import ByteResponse, ByteSource
 from qobuz_downloader.lyrics import LyricsSource
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.qobuz import Qobuz
+from qobuz_downloader.tidal import Tidal
 
 TRACK = Track(id="t1", title="Song", artist="Artist", album="Album", track_number=1)
 
 
-def _flac_bytes(size: int = 0) -> bytes:
+def _flac_bytes(size: int = 0, sample_rate: int = 44100, bit_depth: int = 16) -> bytes:
     header = b"fLaC" + bytes([0x80, 0x00, 0x00, 0x22])
     streaminfo = struct.pack(">HH", 4096, 4096) + b"\x00" * 6
-    packed = (44100 << 44) | (1 << 41) | (15 << 36) | 44100
+    packed = (sample_rate << 44) | (1 << 41) | ((bit_depth - 1) << 36) | sample_rate
     streaminfo += packed.to_bytes(8, "big") + b"\x00" * 16
     data = header + streaminfo
     return data + b"\x00" * max(0, size - len(data))
 
 
 class FakeQobuz(Qobuz):
-    def __init__(self, qualities):
+    def __init__(self, qualities, delivered=(16, 44.1)):
         self._qualities = list(qualities)
+        self._delivered = delivered
         self.stream_calls = 0
 
     def item(self, url):
@@ -44,8 +46,8 @@ class FakeQobuz(Qobuz):
         return Stream(
             url=f"https://cdn.test/{track.id}/{self.stream_calls}",
             quality=quality,
-            sampling_rate=44.1,
-            bit_depth=16,
+            sampling_rate=self._delivered[1],
+            bit_depth=self._delivered[0],
         )
 
 
@@ -86,6 +88,49 @@ class FakeByteSource(ByteSource):
         raise ConnectionError("connection reset")
 
 
+class RoutingSource(FakeByteSource):
+    """Serves different content for the tidal stream url."""
+
+    def __init__(self, qobuz_content, tidal_content):
+        super().__init__(qobuz_content)
+        self.tidal_content = tidal_content
+
+    def stream(self, url, start):
+        if url.startswith("https://tidal.test"):
+            self.calls.append(start)
+            return ByteResponse(
+                status=200,
+                length=len(self.tidal_content),
+                chunks=iter([self.tidal_content]),
+            )
+        return super().stream(url, start)
+
+
+class FakeTidal(Tidal):
+    def __init__(self, match="9", stream_error=None):
+        self.match = match
+        self.stream_error = stream_error
+        self.logins = 0
+        self.lookups: list[str] = []
+        self.stream_calls: list[str] = []
+
+    def hires_match_for(self, track):
+        self.lookups.append(track.id)
+        return self.match
+
+    def ensure_login(self):
+        self.logins += 1
+
+    def stream(self, tidal_track_id):
+        self.stream_calls.append(tidal_track_id)
+        if self.stream_error is not None:
+            raise self.stream_error
+        return Stream(
+            url=f"https://tidal.test/{tidal_track_id}",
+            quality=Quality.HIRES_192,
+        )
+
+
 class FakeLyrics(LyricsSource):
     def __init__(self, text=None):
         self.text = text
@@ -96,9 +141,12 @@ class FakeLyrics(LyricsSource):
         return self.text
 
 
-def make_engine(qobuz, source, tmp_path, retry_delays=(), lyrics=None):
+def make_engine(qobuz, source, tmp_path, retry_delays=(), lyrics=None, tidal=None):
     naming = Naming("{artist}", "{tracknumber} - {title}", root=tmp_path)
-    return Engine(qobuz, naming, source=source, retry_delays=retry_delays, lyrics=lyrics), tmp_path
+    engine = Engine(
+        qobuz, naming, source=source, retry_delays=retry_delays, lyrics=lyrics, tidal=tidal
+    )
+    return engine, tmp_path
 
 
 def test_happy_path_downloads_and_renames(tmp_path):
@@ -248,3 +296,106 @@ def test_no_lyrics_when_none_found(tmp_path):
 
     assert isinstance(outcome, Complete)
     assert not outcome.lyrics_saved
+
+
+def test_tidal_upgrade_replaces_file_when_higher(tmp_path):
+    qobuz = FakeQobuz([Quality.CD], delivered=(24, 44.1))
+    tidal_content = _flac_bytes(2048, sample_rate=96000, bit_depth=24)
+    source = RoutingSource(_flac_bytes(512), tidal_content)
+    tidal = FakeTidal()
+    engine, target = make_engine(qobuz, source, tmp_path, tidal=tidal)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert outcome.upgraded
+    assert outcome.bit_depth == 24
+    assert outcome.sampling_rate == 96.0
+    assert not outcome.fell_back
+    final = target / "Artist/01 - Song.flac"
+    assert final.read_bytes() == tidal_content
+    assert not final.with_suffix(".flac.tidal.part").exists()
+    assert tidal.lookups == ["t1"]
+    assert tidal.stream_calls == ["9"]
+
+
+def test_tidal_upgrade_keeps_qobuz_when_not_higher(tmp_path):
+    qobuz = FakeQobuz([Quality.CD], delivered=(24, 44.1))
+    qobuz_content = _flac_bytes(512, sample_rate=44100, bit_depth=24)
+    source = RoutingSource(qobuz_content, _flac_bytes(512, sample_rate=44100))
+    tidal = FakeTidal()
+    engine, target = make_engine(qobuz, source, tmp_path, tidal=tidal)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert not outcome.upgraded
+    assert (target / "Artist/01 - Song.flac").read_bytes() == qobuz_content
+    assert not (target / "Artist/01 - Song.flac.tidal.part").exists()
+
+
+def test_tidal_upgrade_skipped_outside_quality_gate(tmp_path):
+    for delivered in [(16, 44.1), (24, 96.0)]:
+        qobuz = FakeQobuz([Quality.CD], delivered=delivered)
+        source = FakeByteSource(_flac_bytes(512))
+        tidal = FakeTidal()
+        engine, _ = make_engine(qobuz, source, tmp_path, tidal=tidal)
+
+        outcome = engine.download(TRACK, Quality.CD)
+
+        assert isinstance(outcome, Complete)
+        assert not outcome.upgraded
+        assert tidal.lookups == []
+
+
+def test_tidal_failure_never_fails_the_track(tmp_path):
+    qobuz = FakeQobuz([Quality.CD], delivered=(24, 44.1))
+    qobuz_content = _flac_bytes(512, sample_rate=44100, bit_depth=24)
+    source = RoutingSource(qobuz_content, b"garbage")
+    tidal = FakeTidal(stream_error=RuntimeError("tidal down"))
+    engine, target = make_engine(qobuz, source, tmp_path, tidal=tidal)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert not outcome.upgraded
+    assert (target / "Artist/01 - Song.flac").read_bytes() == qobuz_content
+
+
+def test_tidal_corrupt_flac_cleans_up_part(tmp_path):
+    qobuz = FakeQobuz([Quality.CD], delivered=(24, 44.1))
+    qobuz_content = _flac_bytes(512, sample_rate=44100, bit_depth=24)
+    source = RoutingSource(qobuz_content, b"not a flac" * 10)
+    tidal = FakeTidal()
+    engine, target = make_engine(qobuz, source, tmp_path, tidal=tidal)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert not outcome.upgraded
+    assert (target / "Artist/01 - Song.flac").read_bytes() == qobuz_content
+    assert not (target / "Artist/01 - Song.flac.tidal.part").exists()
+
+
+def test_tidal_no_match_keeps_qobuz_file(tmp_path):
+    qobuz = FakeQobuz([Quality.CD], delivered=(24, 44.1))
+    source = FakeByteSource(_flac_bytes(512, sample_rate=44100, bit_depth=24))
+    tidal = FakeTidal(match=None)
+    engine, _ = make_engine(qobuz, source, tmp_path, tidal=tidal)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert not outcome.upgraded
+    assert tidal.stream_calls == []
+
+
+def test_no_tidal_client_never_looks_up(tmp_path):
+    qobuz = FakeQobuz([Quality.CD], delivered=(24, 44.1))
+    source = FakeByteSource(_flac_bytes(512))
+    engine, _ = make_engine(qobuz, source, tmp_path)
+
+    outcome = engine.download(TRACK, Quality.CD)
+
+    assert isinstance(outcome, Complete)
+    assert not outcome.upgraded

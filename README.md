@@ -108,6 +108,7 @@ qobuz-downloader URL --dir-template "{artist}/{album}" --file-template "{tracknu
 | `--limit` | none | download at most this many tracks this run; everything is still matched and queued, and re-running continues with the rest |
 | `--db` | `<dir>/.queue.sqlite3` | queue database location |
 | `--no-lyrics` | off | skip saving `.lrc` lyric files |
+| `--tidal` | off | after downloading from Qobuz, replace the file with a Tidal copy when Tidal has strictly higher quality — see [Tidal upgrades](#tidal-upgrades) |
 
 *Omit all URLs to resume whatever is pending in the queue database.*
 
@@ -127,6 +128,24 @@ You always get the **best audio the track actually offers**, never more, never l
 - If the track's master is lower (e.g. 24-bit/44.1 kHz) you get that, and the output says so:
   `done: The Weeknd - Blinding Lights (24/44.1, fell back from hires_192)`
 - Pure lossless FLAC only — MP3 is never downloaded (use `--quality cd` as a bandwidth cap)
+
+## Tidal upgrades
+
+The two catalogs don't always carry the same master. Pass `--tidal` and after each Qobuz download the tool checks Tidal for the same track and, if Tidal's copy is strictly higher quality, downloads it and replaces the Qobuz file in place (the `.lrc` sidecar stays):
+
+```bash
+qobuz-downloader URL --tidal --dir ~/Music
+```
+
+The check is deliberately narrow — [research](docs/research/2026-09-09-tidal-quality-comparison.md) against a real 1000-track playlist found upgrades **only** happen when Qobuz delivered 24-bit at 44.1 or 48 kHz (60% of those had HiRes FLAC on Tidal); for 16/44.1 and 24-bit >48 kHz results the check is skipped entirely. The Tidal stream's real bit depth/sample rate is read back from the downloaded FLAC, and the Qobuz file is kept unless the Tidal copy is genuinely better — so a HiFi (non-Plus) subscription can never make things worse.
+
+Requirements and flow:
+
+- A Tidal account with HiRes FLAC access (HiFi Plus tier); without one, `--tidal` simply never replaces anything
+- First use (or expired token) prints a `link.tidal.com/XXXXX` URL — open it in a browser, approve, and the tool continues; the token is cached in `~/.cache/qobuz-downloader/tidal.json` and refreshed automatically
+- Upgrades show up in the progress output as `done: Artist - Title (24/96, upgraded from Tidal)`
+- A Tidal failure never fails the track: the Qobuz file is already on disk
+- Tracks already completed by earlier runs are not retro-upgraded; delete the file and re-run the command to redo one
 
 ## Queue, retries, interruptions
 
