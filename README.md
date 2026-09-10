@@ -118,7 +118,7 @@ Everything goes to the terminal: summary lines on stdout, progress and warnings 
 
 ## Lyrics
 
-By default every downloaded track also gets a synced **`.lrc`** sidecar file next to the audio — `01 - Rehab.flac` gets `01 - Rehab.lrc` — sourced from [LRCLIB](https://lrclib.net) (free, no account). Lyrics lookup never blocks a download: if no synced lyrics exist for a track, only the audio is saved. Use `--no-lyrics` to disable.
+By default every downloaded track also gets a synced **`.lrc`** sidecar file next to the audio — `01 - Rehab.flac` gets `01 - Rehab.lrc` — sourced from [LRCLIB](https://lrclib.net) (free, no account), with [NetEase Cloud Music](https://music.163.com) as a fallback for tracks LRCLIB doesn't carry. Lyrics lookup never blocks a download: if no synced lyrics exist for a track, only the audio is saved. Use `--no-lyrics` to disable.
 
 ## Quality: what you get
 

@@ -14,7 +14,7 @@ from qobuz_downloader.domain import (
     UnmatchedTrack,
 )
 from qobuz_downloader.engine import Engine
-from qobuz_downloader.lyrics import LrcLib
+from qobuz_downloader.lyrics import FallbackLyrics, LrcLib, NetEase
 from qobuz_downloader.match import LiveSpotify, make_matcher
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.queue import SqliteQueue
@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = Engine(
         qobuz,
         naming,
-        lyrics=None if args.no_lyrics else LrcLib(),
+        lyrics=None if args.no_lyrics else FallbackLyrics(LrcLib(), NetEase()),
         tidal=tidal,
     )
     queue = SqliteQueue(Path(args.db) if args.db else root / ".queue.sqlite3")

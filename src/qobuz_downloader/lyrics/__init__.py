@@ -1,13 +1,10 @@
-from abc import ABC, abstractmethod
-
 import httpx
 
 from qobuz_downloader.domain import Track
+from qobuz_downloader.lyrics._interface import LyricsSource
+from qobuz_downloader.lyrics._netease import NetEase
 
-
-class LyricsSource(ABC):
-    @abstractmethod
-    def lrc(self, track: Track) -> str | None: ...
+__all__ = ["LyricsSource", "LrcLib", "NetEase", "FallbackLyrics"]
 
 
 class LrcLib(LyricsSource):
@@ -52,6 +49,24 @@ class LrcLib(LyricsSource):
         response = self._http.get("/api/get", params=params)
         if response.status_code == 200:
             return response.json().get("syncedLyrics")
+        return None
+
+
+class FallbackLyrics(LyricsSource):
+    """Try each source in order; first hit wins. A source being unreachable
+    (RuntimeError) doesn't stop the chain — the next source gets a chance."""
+
+    def __init__(self, *sources: LyricsSource) -> None:
+        self._sources = list(sources)
+
+    def lrc(self, track: Track) -> str | None:
+        for source in self._sources:
+            try:
+                text = source.lrc(track)
+            except RuntimeError:
+                continue
+            if text:
+                return text
         return None
 
 
