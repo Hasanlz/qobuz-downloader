@@ -71,3 +71,16 @@ def test_track_without_duration_accepts_any_candidate():
         )
 
     assert lrc_lib(handler).lrc(track) == SYNCED
+
+
+def test_retries_transient_network_errors():
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("reset")
+        return httpx.Response(200, json={"syncedLyrics": SYNCED, "plainLyrics": "plain"})
+
+    assert lrc_lib(handler).lrc(TRACK) == SYNCED
+    assert calls["n"] == 2

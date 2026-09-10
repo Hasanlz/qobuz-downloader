@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         " {tracknumber} (default: album or playlist name; no subdirectory for a"
         " single track)",
     )
-    parser.add_argument("--file-template", default="{tracknumber} - {title}")
+    parser.add_argument("--file-template", default="{tracknumber}. {title} - {artist}")
     parser.add_argument(
         "--db", default=None, help="queue database path (default: <dir>/.queue.sqlite3)"
     )
