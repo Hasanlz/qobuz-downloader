@@ -164,6 +164,12 @@ pip install -e ".[dev]"
 python -m pytest tests
 ```
 
+## Terminal UI
+
+A Textual front end lives in [`tui/`](tui/README.md) — search, paste Qobuz or
+Spotify URLs, watch live per-track progress, hold/resume individual tracks,
+and play (stream or downloaded) right in the terminal.
+
 Design docs: [`CONTEXT.md`](CONTEXT.md) (domain glossary) and [`docs/adr/`](docs/adr/) (decisions).
 
 ## Disclaimer

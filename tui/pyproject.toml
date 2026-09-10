@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quaver"
+version = "0.3.1"
+description = "Terminal UI for qobuz-downloader."
+requires-python = ">=3.12"
+dependencies = [
+    "textual>=8.0",
+    "httpx[socks]>=0.27",
+    "qobuz-downloader",
+]
+
+[project.optional-dependencies]
+big-playlists = ["qobuz-downloader[big-playlists]"]
+dev = ["pytest>=8"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project.scripts]
+quaver = "quaver.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quaver"]
+
