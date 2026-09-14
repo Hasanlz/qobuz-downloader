@@ -185,7 +185,10 @@ python -m pytest tests
 
 ## Terminal UI
 
-A Textual front end lives in [`tui/`](tui/README.md) — search, paste Qobuz or
+A Textual front end lives in [`tui/`](tui/README.md) — run the setup wizard
+from a clone of this repository: `python wizard.py` (Windows) or
+`python3 wizard.py` (macOS/Linux). It installs the venv, packages, credentials
+and the `quaver` command, then live-tests sign-in. — search, paste Qobuz or
 Spotify URLs, watch live per-track progress, hold/resume individual tracks,
 and play (stream or downloaded) right in the terminal.
 
