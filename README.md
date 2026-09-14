@@ -185,10 +185,10 @@ python -m pytest tests
 
 ## Terminal UI
 
-A Textual front end lives in [`tui/`](tui/README.md) — set it up with one command —
-it downloads the project, creates the venv, installs everything, and walks you
-through Qobuz credentials, settings and the `quaver` command, ending with a
-live sign-in test:
+A Textual front end lives in [`tui/`](tui/README.md). Set it up with one
+command — it downloads the project, creates the venv, installs everything, and
+walks you through your Qobuz credentials, settings and the `quaver` command,
+ending with a live sign-in test:
 
 ```powershell
 powershell -c "irm https://raw.githubusercontent.com/Hasanlz/qobuz-downloader/main/bootstrap.ps1 | iex"   # Windows
@@ -198,9 +198,10 @@ powershell -c "irm https://raw.githubusercontent.com/Hasanlz/qobuz-downloader/ma
 curl -fsSL https://raw.githubusercontent.com/Hasanlz/qobuz-downloader/main/bootstrap.sh | bash            # macOS / Linux
 ```
 
-Or from an existing clone: `python wizard.py` (Windows) / `python3 wizard.py`. — search, paste Qobuz or
-Spotify URLs, watch live per-track progress, hold/resume individual tracks,
-and play (stream or downloaded) right in the terminal.
+Or from an existing clone: `python wizard.py` (Windows) / `python3 wizard.py`
+(macOS/Linux). The app then lets you search Qobuz, paste Qobuz or Spotify
+URLs, watch live per-track progress, hold/resume individual tracks, and play
+(streamed or downloaded) right in the terminal.
 
 Design docs: [`CONTEXT.md`](CONTEXT.md) (domain glossary) and [`docs/adr/`](docs/adr/) (decisions).
 
