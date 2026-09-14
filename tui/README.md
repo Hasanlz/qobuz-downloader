@@ -25,22 +25,29 @@ queue view — all without leaving the terminal.
 - **Toasts** — a toast pops when tracks are queued, unmatched, retried, or held.
 - **Search spinner** — a loading animation runs while a Qobuz search is in flight.
 
-## Setup
+## Setup — one command
 
-**Recommended — the wizard:** from a clone of this repository, run the setup
-wizard. It creates a virtual environment, installs the downloader + this UI,
-walks you through your Qobuz credentials, saves settings, wires up the
-`quaver` command, and finishes with a real sign-in test.
+**Windows (PowerShell):**
 
-```bash
-python wizard.py        # Windows
-python3 wizard.py       # macOS / Linux
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/Hasanlz/qobuz-downloader/main/bootstrap.ps1 | iex"
 ```
 
-Re-run it any time — it keeps values you already saved. `python wizard.py --check`
-health-checks an existing setup without changing anything.
+**macOS / Linux:**
 
-**Manual** (any OS, from a clone of this repository):
+```bash
+curl -fsSL https://raw.githubusercontent.com/Hasanlz/qobuz-downloader/main/bootstrap.sh | bash
+```
+
+Each one downloads the project (into `~/quaver`), creates a virtual
+environment, installs everything, walks you through your Qobuz credentials and
+settings, wires up the `quaver` command for your OS, and ends with a live
+sign-in test. Re-run any time — saved values are kept. The scripts honor
+`QUAVER_REPO_URL` / `QUAVER_REF` / `QUAVER_HOME`, and forward extra arguments
+to the wizard (`--defaults`, `--check`, `--skip-install`, `--no-test`).
+Before this lands on `main`, add `QUAVER_REF=<branch>` to the environment.
+
+### Manual (any OS, from a clone of this repository)
 
 ```powershell
 # Windows (PowerShell)
@@ -57,9 +64,14 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 pip install -e tui
-quaver    # lives in .venv/bin — add .venv/bin to PATH, or link:
+quaver    # in .venv/bin — add it to PATH, or:
 ln -s "$PWD/.venv/bin/quaver" ~/.local/bin/quaver
 ```
+
+Without a bootstrap one-liner, run the wizard from a clone: `python wizard.py`
+(Windows) / `python3 wizard.py` (macOS/Linux).
+
+## Requirements
 
 Requires Python 3.12+ and an active Qobuz subscription (free accounts cannot
 download; Studio for Hi-Res).

@@ -48,6 +48,29 @@ written: list[str] = []
 # ── wizard library ─────────────────────────────────────────────────────────
 
 
+def _tty():
+    """Reading terminal, even when stdin is a pipe (curl | bash)."""
+    if sys.stdin.isatty():
+        return sys.stdin
+    if os.name != "nt":
+        try:
+            return open("/dev/tty", "r")
+        except OSError:
+            pass
+    return sys.stdin
+
+
+def _read(prompt: str = "") -> str:
+    handle = _tty()
+    try:
+        if prompt:
+            print(prompt, end="", flush=True)
+        line = handle.readline()
+    except OSError:
+        return ""
+    return line.rstrip("\n")
+
+
 def clear() -> None:
     if sys.stdout.isatty():
         os.system("cls" if os.name == "nt" else "clear")
@@ -97,19 +120,15 @@ def stage(name: str) -> None:
 def pause(text: str = "Press Enter to continue") -> None:
     if DEFAULTS:
         return
-    try:
-        input(f"  {DIM}{text}{RESET} ")
-    except EOFError:
+    answer = _read(f"  {DIM}{text}{RESET} ")
+    if answer == "":
         cancel()
 
 
 def confirm(text: str) -> bool:
     if DEFAULTS:
         return True
-    try:
-        reply = input(f"  {YELLOW}? {text} [y/N]{RESET} ").strip().lower()
-    except EOFError:
-        return False
+    reply = _read(f"  {YELLOW}? {text} [y/N]{RESET} ").strip().lower()
     return reply in ("y", "yes")
 
 
@@ -117,11 +136,7 @@ def ask(prompt: str, default: str = "") -> str:
     if DEFAULTS:
         return default
     suffix = f" {DIM}[Enter = {default}]{RESET}" if default else ""
-    try:
-        value = input(f"  {BOLD}{prompt}{RESET}{suffix} ").strip()
-    except EOFError:
-        cancel()
-    return value or default
+    return _read(f"  {BOLD}{prompt}{RESET}{suffix} ").strip() or default
 
 
 def ask_secret(prompt: str) -> str:
@@ -130,7 +145,7 @@ def ask_secret(prompt: str) -> str:
     try:
         return getpass.getpass(f"  {BOLD}{prompt}{RESET} ").strip()
     except (EOFError, OSError):
-        return ask(prompt)  # non-tty fallback
+        cancel()
 
 
 def open_url(url: str) -> None:
