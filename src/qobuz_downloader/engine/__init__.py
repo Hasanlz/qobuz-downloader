@@ -13,6 +13,7 @@ from qobuz_downloader.engine._source import ByteSource, HttpByteSource
 from qobuz_downloader.lyrics import LyricsSource
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.qobuz import Qobuz
+from qobuz_downloader.source import QobuzSource, Source, parse
 from qobuz_downloader.tidal import Tidal
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class Engine:
         retry_delays: Sequence[float] = (1.0, 2.0),
         lyrics: LyricsSource | None = None,
         tidal: Tidal | None = None,
+        sources: dict[str, Source] | None = None,
     ) -> None:
         self._qobuz = qobuz
         self._naming = naming
@@ -41,15 +43,36 @@ class Engine:
         self._retry_delays = tuple(retry_delays)
         self._lyrics = lyrics
         self._tidal = tidal
+        # Registry of download platforms keyed by Source name; tracks are
+        # dispatched by parsing the id prefix ("tidal:123" -> tidal). Bare
+        # ids parse as qobuz, so existing queue databases keep working.
+        self._sources: dict[str, Source] = sources or {
+            "qobuz": QobuzSource(qobuz),
+        }
+        self._lossy_ok = False
+
+    def allow_lossy(self, allow: bool) -> None:
+        """Opt into lossy tiers when no lossless copy exists anywhere."""
+        self._lossy_ok = allow
 
     def download(self, track: Track, preferred: Quality) -> Outcome:
+        source_name, _ = parse(track.id)
+        platform = self._sources.get(source_name)
+        if platform is None:
+            return Failed(
+                reason=f"no client for source {source_name!r}"
+                " (missing login or credentials?)"
+            )
         rungs = [
             quality
-            for quality in self._qobuz.qualities(track)
+            for quality in platform.qualities(track)
             if preferred >= quality > Quality.LOSSY
         ]
         if not rungs:
-            return Failed(reason="only lossy audio is available for this track")
+            if self._lossy_ok and Quality.LOSSY in platform.qualities(track):
+                rungs = [Quality.LOSSY]
+            else:
+                return Failed(reason="only lossy audio is available for this track")
         requested = rungs[-1]
         path = self._naming.path_for(track, extension=_EXTENSIONS[requested])
         partial = path.with_suffix(path.suffix + ".part")
@@ -59,8 +82,8 @@ class Engine:
             if delay:
                 time.sleep(delay)
             try:
-                stream = self._attempt(track, requested, partial)
-                self._validate(partial)
+                stream = self._attempt(platform, track, requested, partial)
+                self._validate(partial, requested)
                 partial.replace(path)
                 complete = self._maybe_upgrade(
                     Complete(
@@ -74,7 +97,7 @@ class Engine:
                     track,
                     path,
                 )
-                self._apply_tags(track, path)
+                self._apply_tags(track, path, platform)
                 return complete
             except Exception as error:
                 last_error = str(error) or type(error).__name__
@@ -97,6 +120,10 @@ class Engine:
         failure never fails the track: the Qobuz file is already on disk.
         """
         if self._tidal is None or outcome.upgraded:
+            return outcome
+        if parse(track.id)[0] != "qobuz":
+            # already downloaded from Tidal (or another platform): no
+            # self-upgrade
             return outcome
         if outcome.bit_depth != 24 or (outcome.sampling_rate or 0) > 48.0:
             return outcome
@@ -150,14 +177,17 @@ class Engine:
             return outcome
 
     def _attempt(
-        self, track: Track, requested: Quality, partial: Path
+        self, platform: Source, track: Track, requested: Quality, partial: Path
     ) -> Stream:
-        stream = self._qobuz.stream(track, requested)
+        stream = platform.stream(track, requested)
+        source = stream.byte_source or self._source
         start = partial.stat().st_size if partial.exists() else 0
-        response = self._source.stream(stream.url, start)
+        response = source.stream(stream.url, start)
         if start and response.status != 206:
+            # resumed but the source ignored the range (or can't honor
+            # it — Deezer's striped cipher): restart cleanly
             start = 0
-            response = self._source.stream(stream.url, 0)
+            response = source.stream(stream.url, 0)
         partial.parent.mkdir(parents=True, exist_ok=True)
         mode = "ab" if start else "wb"
         with partial.open(mode) as handle:
@@ -172,17 +202,27 @@ class Engine:
                 )
         return stream
 
-    def _validate(self, partial: Path) -> None:
+    def _validate(self, partial: Path, requested: Quality = Quality.CD) -> None:
         try:
-            FLAC(str(partial))
+            if requested is Quality.LOSSY:
+                from mutagen.mp3 import MP3
+
+                MP3(str(partial))
+            else:
+                FLAC(str(partial))
         except MutagenError as error:
             partial.unlink(missing_ok=True)
-            raise ValueError(f"corrupt FLAC file: {error}") from error
+            raise ValueError(f"corrupt audio file: {error}") from error
 
-    def _apply_tags(self, track: Track, path: Path) -> None:
+    def _apply_tags(self, track: Track, path: Path, platform: Source | None = None) -> None:
         """Tag the final file; never fail a finished download over metadata."""
         try:
-            _tags.apply(path, track, self._qobuz.cover_url(track), self._source)
+            _tags.apply(
+                path,
+                track,
+                platform.cover_url(track) if platform else None,
+                self._source,
+            )
         except Exception as error:
             log.warning("tagging skipped for %s: %s", track.title, error)
 

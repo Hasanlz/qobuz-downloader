@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 
+from qobuz_downloader import collect
 from qobuz_downloader.domain import (
     Complete,
     Quality,
@@ -16,9 +17,13 @@ from qobuz_downloader.domain import (
 from qobuz_downloader.engine import Engine
 from qobuz_downloader.lyrics import FallbackLyrics, LrcLib, NetEase
 from qobuz_downloader.match import LiveSpotify, make_matcher
+from qobuz_downloader.match._catalog import Catalog
 from qobuz_downloader.naming import Naming
 from qobuz_downloader.queue import SqliteQueue
 from qobuz_downloader.qobuz import LiveQobuz
+from qobuz_downloader.source import Source, parse
+from qobuz_downloader.source._deezer import DeezerSource
+from qobuz_downloader.source._tidal import TidalSource
 from qobuz_downloader.tidal import LiveTidal
 
 _QUALITIES = {
@@ -36,12 +41,62 @@ def _quality(value: str) -> Quality:
     return _QUALITIES[value]
 
 
+def _sources_registry(
+    qobuz: LiveQobuz, tidal: LiveTidal | None, deezer=None
+) -> dict[str, Source]:
+    """Downloadable platforms keyed by source name.
+
+    A platform joins only when it can actually stream: Qobuz always
+    (its credentials were validated at login), Tidal only after its
+    one-time device login is cached, Deezer only with DEEZER_ARL set.
+    Matching and native-URL collection use this same gate, so no track
+    is ever queued against a platform that could not download it —
+    tracks missing from the credentialed platforms are reported
+    unmatched instead of failing later at stream time.
+    """
+    registry: dict[str, Source] = {}
+    from qobuz_downloader.source import QobuzSource
+
+    registry["qobuz"] = QobuzSource(qobuz)
+    if tidal is not None and tidal.has_login():
+        registry["tidal"] = TidalSource(tidal)
+    if deezer is not None and deezer.has_login():
+        registry["deezer"] = DeezerSource(deezer)
+    return registry
+
+
+def _build_catalog(
+    mode: str, registry: dict[str, Source], allow_lossy: bool
+) -> Catalog:
+    """Source search order per --source, plus the report label."""
+    order = {
+        "qobuz": ["qobuz", "tidal", "deezer"],
+        "tidal": ["tidal", "qobuz", "deezer"],
+        "deezer": ["deezer", "qobuz", "tidal"],
+    }
+    names = order.get(mode, list(registry))
+    sources = [registry[name] for name in names if name in registry]
+    label = (
+        " + ".join(s.name.capitalize() for s in sources)
+        if len(sources) > 1
+        else (sources[0].name.capitalize() if sources else "Qobuz")
+    )
+    return Catalog(sources, label=label, mode=mode, allow_lossy=allow_lossy)
+
+
 def _collect(
-    qobuz: LiveQobuz, matcher: LiveSpotify, url: str
+    qobuz: LiveQobuz,
+    matcher: LiveSpotify,
+    url: str,
+    *,
+    tidal: LiveTidal | None = None,
+    deezer=None,
 ) -> tuple[list[Track], list[UnmatchedTrack]]:
     log.info("collecting tracks from %s", url)
     if "qobuz.com" in url:
         return qobuz.tracks(qobuz.item(url)), []
+    if collect.is_native(url):
+        return collect.native_tracks(url, tidal=tidal, deezer=deezer), []
     result = matcher.match(url)
     if isinstance(result, Unmatched):
         return [], [UnmatchedTrack(title=url, artist="", reason=result.reason)]
@@ -93,6 +148,22 @@ def main(argv: list[str] | None = None) -> int:
         " /48; needs a one-time Tidal login, a paid subscription for HiRes)",
     )
     parser.add_argument(
+        "--source",
+        default="best",
+        choices=["best", "qobuz", "tidal", "deezer"],
+        help="which catalog to match and download from: 'best' (default)"
+        " searches every platform you have credentials for and keeps the"
+        " highest-quality copy; a single platform name prefers it, with the"
+        " other credentialed platforms as fallback; tracks on platforms"
+        " without credentials are reported unmatched",
+    )
+    parser.add_argument(
+        "--allow-lossy",
+        action="store_true",
+        help="when no lossless copy exists on any source, take MP3 instead of"
+        " leaving the track unmatched",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="log every match decision and download retry to stderr",
@@ -136,31 +207,69 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.dir).expanduser()
     naming = Naming(args.dir_template, args.file_template, root=root)
 
-    tidal = None
-    if args.tidal:
-        tidal = LiveTidal()
+    # Tidal: search/metadata needs no login (public partner token), but
+    # only a *logged-in* Tidal joins the platform registry — otherwise
+    # tracks would queue against a catalog we cannot stream from, and
+    # fail at download time. --tidal (or --source tidal) triggers the
+    # one-time browser device login; a cached login is picked up
+    # silently and lets Tidal participate without any flag.
+    tidal_client: LiveTidal | None = LiveTidal()
+    if args.tidal or args.source == "tidal":
         try:
-            tidal.ensure_login()
+            tidal_client.ensure_login()
         except (RuntimeError, httpx.HTTPError) as error:
             print(
-                f"tidal login failed: {error} — continuing without Tidal upgrades",
+                f"error: tidal login failed: {error}"
+                + (
+                    " — --source tidal needs a working Tidal login"
+                    if args.source == "tidal"
+                    else " — continuing without Tidal"
+                ),
                 file=sys.stderr,
             )
-            tidal = None
+            if args.source == "tidal":
+                return 2
+    elif not tidal_client.has_login():
+        tidal_client = None  # no cached login and none requested: Tidal sits out
+
+    # Deezer: search is public, but streaming needs the DEEZER_ARL
+    # cookie; without it Deezer stays out of the registry entirely.
+    from qobuz_downloader.deezer import LiveDeezer
+
+    deezer: LiveDeezer | None = LiveDeezer(arl=os.environ.get("DEEZER_ARL", ""))
+    if not deezer.has_login() and args.source == "deezer":
+        print(
+            "error: --source deezer needs the DEEZER_ARL environment"
+            " variable set to your Deezer ARL cookie",
+            file=sys.stderr,
+        )
+        return 2
+
+    registry = _sources_registry(qobuz, tidal_client, deezer)
+    catalog = _build_catalog(args.source, registry, args.allow_lossy)
 
     engine = Engine(
         qobuz,
         naming,
         lyrics=None if args.no_lyrics else FallbackLyrics(LrcLib(), NetEase()),
-        tidal=tidal,
+        tidal=tidal_client if args.tidal else None,
+        sources=registry,
     )
+    engine.allow_lossy(args.allow_lossy)
     queue = SqliteQueue(Path(args.db) if args.db else root / ".queue.sqlite3")
-    matcher = make_matcher(qobuz)
+    matcher = make_matcher(qobuz, catalog=catalog)
 
     had_error = False
+    unmatched_total = 0
     for url in args.urls:
         try:
-            tracks, unmatched = _collect(qobuz, matcher, url)
+            tracks, unmatched = _collect(
+                qobuz,
+                matcher,
+                url,
+                tidal=tidal_client,
+                deezer=deezer,
+            )
         except (ValueError, RuntimeError) as error:
             print(f"error: {error}", file=sys.stderr)
             had_error = True
@@ -173,6 +282,20 @@ def main(argv: list[str] | None = None) -> int:
         for miss in unmatched:
             who = f"{miss.artist} - {miss.title}" if miss.artist else miss.title
             print(f"unmatched: {who} ({miss.reason})", file=sys.stderr)
+            unmatched_total += 1
+
+    missing_platforms = [
+        name
+        for name, ready in (("tidal", tidal_client), ("deezer", deezer))
+        if ready is None or not ready.has_login()
+    ]
+    if unmatched_total and missing_platforms:
+        print(
+            f"note: {unmatched_total} track(s) unmatched; some may exist on"
+            f" platforms without credentials ({', '.join(missing_platforms)})"
+            " — add a Tidal login (--tidal) or DEEZER_ARL to download those",
+            file=sys.stderr,
+        )
 
     if not args.urls:
         requeued = queue.requeue_failed()
@@ -200,6 +323,9 @@ def main(argv: list[str] | None = None) -> int:
             note = f", fell back from {preferred.name.lower()}" if outcome.fell_back else ""
             if outcome.upgraded:
                 note += ", upgraded from Tidal"
+            source = parse(track.id)[0]
+            if source != "qobuz":
+                note += f", from {source}"
             print(f"done: {track.artist} - {track.title} ({specs}{note})")
         else:
             failures += 1

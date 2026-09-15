@@ -151,6 +151,9 @@ class FakeTidal(Tidal):
         self.lookups.append(track.id)
         return self.match
 
+    def has_login(self):
+        return True
+
     def ensure_login(self):
         self.logins += 1
 
@@ -162,6 +165,15 @@ class FakeTidal(Tidal):
             url=f"https://tidal.test/{tidal_track_id}",
             quality=Quality.HIRES_192,
         )
+
+    def search_tracks(self, query, limit):
+        return []
+
+    def qualities(self, tidal_track_id):
+        return [Quality.LOSSY, Quality.CD]
+
+    def cover_url(self, tidal_track_id):
+        return None
 
 
 class FakeLyrics(LyricsSource):

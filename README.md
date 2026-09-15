@@ -1,11 +1,13 @@
 # qobuz-downloader
 
-Saves lossless audio files (FLAC) from a Qobuz subscription to your local disk. Accepts both Qobuz and Spotify URLs — Spotify links are matched against Qobuz's catalog automatically, downloads always come from your own Qobuz account.
+Saves lossless audio files (FLAC) from a Qobuz (or Tidal) subscription to your local disk. Accepts Qobuz, Spotify, Tidal, and Deezer URLs — Spotify links are matched against the catalogs automatically, the other three download directly. Tracks download from the highest quality available on whichever platforms you have credentials for (by default `--source best`; with only Qobuz credentials, only Qobuz is ever used).
 
 ## Requirements
 
 - Python 3.12+
 - An active **Qobuz subscription** (free accounts cannot download; Studio tier recommended for Hi-Res)
+- Optional: a **Tidal account** — for tracks missing from Qobuz and for [Tidal upgrades](#tidal-upgrades)
+- Optional: a **Deezer account** — third fallback catalog (FLAC 16/44.1)
 
 ## Install
 
@@ -36,7 +38,7 @@ export QOBUZ_EMAIL="you@example.com"
 export QOBUZ_PASSWORD="..."
 ```
 
-No Spotify credentials are needed — metadata comes from public embed pages / Spotify's public partner API.
+No Spotify credentials are needed — metadata comes from public embed pages / Spotify's public partner API. Tidal and Deezer are optional additions: each becomes a download source only once you have credentials for it (Tidal: run once with `--tidal` for the browser device login; Deezer: set `DEEZER_ARL`). A Qobuz URL downloads from Qobuz; a Tidal or Deezer URL downloads from that platform (with its credentials).
 
 ## Usage
 
@@ -54,8 +56,10 @@ qobuz-downloader URL [URL ...] [options]
 | `https://open.spotify.com/track/...` | finds the track on Qobuz, downloads it |
 | `https://open.spotify.com/album/...` | matches the album, downloads it |
 | `https://open.spotify.com/playlist/...` | matches and downloads track by track |
+| `https://tidal.com/track/...` \| `/album/...` \| `/playlist/...` | downloads from Tidal directly (needs the Tidal login) |
+| `https://www.deezer.com/track/...` \| `/album/...` \| `/playlist/...` | downloads from Deezer directly (needs `DEEZER_ARL`) |
 
-Qobuz and Spotify URLs can be mixed in one command.
+URLs from all four platforms can be mixed in one command.
 
 ### Examples
 
@@ -109,8 +113,33 @@ qobuz-downloader URL --dir-template "{artist}/{album}" --file-template "{tracknu
 | `--db` | `<dir>/.queue.sqlite3` | queue database location |
 | `--no-lyrics` | off | skip saving `.lrc` lyric files |
 | `--tidal` | off | after downloading from Qobuz, replace the file with a Tidal copy when Tidal has strictly higher quality — see [Tidal upgrades](#tidal-upgrades) |
+| `--source` | `best` | which catalog to match and download from: `qobuz`, `tidal`, `deezer`, or `best` (search every platform you have credentials for, keep the highest-quality copy). With a single choice, tracks it doesn't carry still fall back to the other credentialed platforms |
+| `--allow-lossy` | off | when no lossless copy exists anywhere, download MP3 instead of leaving the track unmatched |
 
 *Omit all URLs to resume whatever is pending in the queue database.*
+
+### Sources
+
+Downloads come from one of the supported platforms — Spotify is **not** one of them (it serves no downloadable audio; it is a metadata source the matcher runs against). **A platform joins the search and download only when you have working credentials for it** — so with just a Qobuz subscription, everything is downloaded from Qobuz and nothing else, and a track that exists only on Tidal or Deezer is reported unmatched (the run's final note tells you which platforms lack credentials):
+
+| Platform | Matching | Audio | Credentials |
+|---|---|---|---|
+| Qobuz | search API | FLAC up to 24-bit/192 kHz | Qobuz subscription (required) |
+| Tidal | search API (partner token — no login needed) | FLAC up to 24-bit/192 kHz (HiRes needs a paid tier) | one-time device login, needed for streaming |
+| Deezer | public search (no auth) | FLAC 16/44.1 + MP3 320 | `DEEZER_ARL` cookie, needed for streaming |
+
+- `--source best` (default) — search every **credentialed** platform, download the highest-quality copy (ties go to the better match, then to Qobuz)
+- `--source qobuz` / `--source tidal` / `--source deezer` — that catalog first; the other credentialed platforms fall back so a track it doesn't carry is still downloaded from somewhere
+- `--tidal` — triggers the one-time Tidal browser login, cached in `~/.cache/qobuz-downloader/tidal.json`; after that Tidal participates in `best` automatically
+- Cross-platform matches are visible in the progress output: `done: Artist - Title (16/44.1, from tidal)`
+- Lossy (MP3) is never downloaded unless `--allow-lossy` is passed and no lossless copy exists anywhere
+- Deezer downloads cannot resume mid-file (its stream is chunk-encrypted); an interrupted Deezer download restarts cleanly
+
+Deezer ARL setup: in a logged-in browser, open the `arl` cookie at `deezer.com` and export its value:
+
+```bash
+export DEEZER_ARL="..."
+```
 
 ### Progress output
 

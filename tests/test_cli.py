@@ -39,6 +39,9 @@ class FakeEngine:
     def __init__(self, *args, **kwargs):
         self.downloaded: list[str] = []
 
+    def allow_lossy(self, allow):
+        self.lossy_ok = allow
+
     def download(self, track, preferred):
         self.downloaded.append(track.id)
         return Complete(path=Path("/nowhere"), quality=Quality.CD, fell_back=False)

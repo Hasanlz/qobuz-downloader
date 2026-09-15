@@ -1,17 +1,31 @@
 # Qobuz Downloader
 
-Saves lossless audio files from a Qobuz subscription to the local disk.
+Saves lossless audio files from a Qobuz (or Tidal) subscription to the local disk.
 
 ## Language
 
 ### Catalog
 
+**Source**:
+A download platform: Qobuz, Tidal, or Deezer. Every Track id in the
+Queue carries (or implies) its Source — `tidal:233554206`,
+`deezer:73997802`; bare ids are Qobuz.
+_Avoid_: provider, service
+
+**Source order**:
+The preference order Sources are searched in: the chosen platform first
+(`--source`), the rest as Fallback. A Source joins only when it has
+credentials (can stream); `best` means: search all credentialed
+Sources, download the highest Quality.
+
 **Item**:
-Anything addressable by a Qobuz URL: a Track, Album, Artist, or Playlist.
+Anything addressable by a platform URL: a Track, Album, Artist, or
+Playlist. Qobuz, Tidal and Deezer URLs name their own Items directly;
+Spotify URLs identify nothing until Matched.
 _Avoid_: resource, entity
 
 **Track**:
-A single piece of music on Qobuz; the smallest downloadable unit.
+A single piece of music on a Source; the smallest downloadable unit.
 _Avoid_: song
 
 **Album**:
@@ -50,14 +64,14 @@ MP3 320 kbps audio.
 A URL identifying a Qobuz Item directly. Needs no Match.
 
 **Spotify URL**:
-A URL identifying a track, album, or playlist on Spotify. Identifies no Qobuz Item until Matched.
+A URL identifying a track, album, or playlist on Spotify. Identifies no Qobuz Item until Matched. Spotify serves no downloadable audio — it is a metadata source for Match only.
 
 **Match**:
-The Qobuz Item found to correspond to a Spotify URL's item. Matching can fail.
+The Track found to correspond to a Spotify URL's item. Matching can fail.
 _Avoid_: resolve, convert, translate
 
 **Unmatched**:
-A Spotify item with no satisfactory Match. Reported to the user and marked in the Queue — never silently skipped.
+A Spotify item with no satisfactory Match on any Source. Reported to the user and marked in the Queue — never silently skipped.
 
 ### Downloading
 
@@ -66,13 +80,16 @@ Retrieving a Track at a chosen Quality and saving it as a local audio file.
 _Avoid_: stream-rip, rip, capture
 
 **Subscription**:
-The user's Qobuz membership (e.g. Studio). It caps the highest Quality a Track can be downloaded at.
+The user's membership (e.g. Qobuz Studio, Tidal HiFi). It caps the highest Quality a Track can be downloaded at.
 
 **Preferred Quality**:
 The Quality a Download requests. Hi-Res by default; the user may cap it (e.g. to CD quality).
 
 **Fallback**:
-Using a lower Quality than the Preferred Quality because the Track or Subscription doesn't offer it. The user is always told when a Download falls back.
+Using something other than the first choice — a lower Quality than the
+Preferred Quality, or another Source than the chosen one — because the
+first choice doesn't offer the Track. The user is always told when a
+Download falls back.
 _Avoid_: downgrade notice, quality drop
 
 **Partial download**:

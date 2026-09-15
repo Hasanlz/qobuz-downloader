@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -160,6 +161,235 @@ def test_track_with_dissimilar_title_is_unmatched():
     assert isinstance(result, Unmatched)
 
 
+def test_remastered_title_matches_plain_qobuz_title():
+    """'Hey You - 2011 Remastered Version' must match Qobuz's 'Hey You'.
+
+    The old title gate scored the full strings against each other, so
+    release suffixes Spotify appends pushed famous tracks below the
+    threshold and they were never queued.
+    """
+    qobuz_track = Track(
+        id="q1",
+        title="Hey You",
+        artist="Pink Floyd",
+        album="The Wall (Remastered 2011 Version)",
+        duration_seconds=279,
+    )
+    client = embed_client(
+        {
+            "/track/": {
+                "id": "s1",
+                "name": "Hey You - 2011 Remastered Version",
+                "artists": [{"name": "Pink Floyd"}],
+                "duration": 278706,
+            }
+        }
+    )
+    qobuz = FakeQobuz(tracks_by_query={"Pink Floyd Hey You": [qobuz_track]})
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/track/s1")
+
+    assert isinstance(result, Matched)
+    assert result.tracks[0].id == "q1"
+
+
+def test_remastered_title_retries_search_with_cleaned_query():
+    """When the noisy title finds nothing, search again with it stripped.
+
+    'Money - 2011 Remastered Version' makes Qobuz return Wall tracks that
+    aren't Money; the cleaned query 'Money' finds the real one.
+    """
+    wall_track = Track(
+        id="q8",
+        title="Comfortably Numb",
+        artist="Pink Floyd",
+        album="The Wall",
+        duration_seconds=382,
+    )
+    money_track = Track(
+        id="q9",
+        title="Money",
+        artist="Pink Floyd",
+        album="The Dark Side of the Moon",
+        duration_seconds=382,
+    )
+    client = embed_client(
+        {
+            "/track/": {
+                "id": "s1",
+                "name": "Money - 2011 Remastered Version",
+                "artists": [{"name": "Pink Floyd"}],
+                "duration": 406000,
+            }
+        }
+    )
+    qobuz = FakeQobuz(
+        tracks_by_query={
+            # noisy query returns the wrong Wall track only
+            "Pink Floyd Money - 2011 Remastered Version": [wall_track],
+            "Pink Floyd Money": [money_track],
+        }
+    )
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/track/s1")
+
+    assert isinstance(result, Matched)
+    assert result.tracks[0].id == "q9"
+
+
+def test_remastered_in_parentheses_matches_plain_title():
+    client = embed_client(
+        {
+            "/track/": {
+                "id": "s1",
+                "name": "One (Remastered)",
+                "artists": [{"name": "Metallica"}],
+                "duration": 444000,
+            }
+        }
+    )
+    qobuz_track = Track(
+        id="q1",
+        title="One",
+        artist="Metallica",
+        album="...And Justice for All",
+        duration_seconds=444,
+    )
+    qobuz = FakeQobuz(tracks_by_query={"Metallica One": [qobuz_track]})
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/track/s1")
+
+    assert isinstance(result, Matched)
+    assert result.tracks[0].id == "q1"
+
+
+def test_foreign_script_title_does_not_match_other_foreign_titles():
+    """Two different Persian titles must not look identical.
+
+    The old _normalize kept only [a-z0-9], so any non-Latin title became an
+    empty string, and empty-vs-empty scored as a 100% match. That is how
+    'خاکستر' got queued as a completely different song.
+    """
+    wrong = Track(
+        id="q2",
+        title="حبيبة الكل",
+        artist="Yusor Hamed",
+        album="حبيبة الكل",
+        duration_seconds=147,
+    )
+    client = embed_client(
+        {
+            "/track/": {
+                "id": "s1",
+                "name": "خاکستر",
+                "artists": [{"name": "Hamed Mohammadi"}],
+                "duration": 284000,
+            }
+        }
+    )
+    qobuz = FakeQobuz(tracks_by_query={"Hamed Mohammadi خاکستر": [wrong]})
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/track/s1")
+
+    assert isinstance(result, Unmatched)
+
+
+def test_foreign_script_title_matches_identical_title():
+    right = Track(
+        id="q3",
+        title="خاکستر",
+        artist="Hamed Mohammadi",
+        album="خاکستر",
+        duration_seconds=284,
+    )
+    client = embed_client(
+        {
+            "/track/": {
+                "id": "s1",
+                "name": "خاکستر",
+                "artists": [{"name": "Hamed Mohammadi"}],
+                "duration": 284000,
+            }
+        }
+    )
+    qobuz = FakeQobuz(tracks_by_query={"Hamed Mohammadi خاکستر": [right]})
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/track/s1")
+
+    assert isinstance(result, Matched)
+    assert result.tracks[0].id == "q3"
+
+
+def test_soundtrack_attribution_is_stripped_from_title():
+    client = embed_client(
+        {
+            "/track/": {
+                "id": "s1",
+                "name": 'I Know You - From The "Fifty Shades Of Grey" Soundtrack',
+                "artists": [{"name": "Skylar Grey"}],
+                "duration": 225000,
+            }
+        }
+    )
+    qobuz_track = Track(
+        id="q1",
+        title="I Know You",
+        artist="Skylar Grey",
+        album="Fifty Shades of Grey",
+        duration_seconds=225,
+    )
+    qobuz = FakeQobuz(tracks_by_query={"Skylar Grey I Know You": [qobuz_track]})
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/track/s1")
+
+    assert isinstance(result, Matched)
+    assert result.tracks[0].id == "q1"
+
+
+def test_track_found_via_album_when_search_misses():
+    """Track search can surface only covers; the album holds the original.
+
+    'Under Your Scars' on Qobuz: search returns covers/live versions, but
+    the studio track sits on the album 'When Legends Rise'. Playlist
+    payloads carry the album name, so the fallback can use it.
+    """
+    studio = Track(
+        id="q1",
+        title="Under Your Scars",
+        artist="Godsmack",
+        album="When Legends Rise",
+        track_number=6,
+        duration_seconds=231,
+    )
+    qobuz = FakeQobuz(tracks_by_query={"Godsmack Under Your Scars": []})
+    qobuz.albums_by_query = {
+        "Godsmack When Legends Rise": [
+            Album(id="qa1", title="When Legends Rise", artist="Godsmack", tracks_count=11)
+        ]
+    }
+    qobuz.tracks_by_album = {"qa1": [studio]}
+    matcher = LiveSpotify(qobuz, api=EmbedSpotify(http=embed_client({})))
+
+    wanted = Track(
+        id="spotify:s1",
+        title="Under Your Scars",
+        artist="Godsmack",
+        album="When Legends Rise",
+        duration_seconds=231,
+    )
+
+    best = matcher._best_track(wanted)
+
+    assert best is not None
+    assert best.id == "q1"
+
+
 def test_album_match_expands_to_tracks():
     qobuz_album = Album(
         id="qa1", title="After Hours", artist="The Weeknd", tracks_count=2
@@ -198,6 +428,59 @@ def test_album_match_expands_to_tracks():
     assert isinstance(result, Matched)
     assert [t.id for t in result.tracks] == ["q1"]
     assert [t.collection for t in result.tracks] == ["After Hours"]
+
+
+class FlakySearchQobuz(FakeQobuz):
+    """Raises on one poison query, like Qobuz's search backend does."""
+
+    def __init__(self, failing_query, **kwargs):
+        super().__init__(**kwargs)
+        self.failing_query = failing_query
+
+    def search_tracks(self, query, limit):
+        if query == self.failing_query:
+            raise httpx.HTTPStatusError(
+                "400 Bad Request",
+                request=httpx.Request("GET", "https://www.qobuz.com/api.json/0.2/track/search"),
+                response=httpx.Response(400),
+            )
+        return super().search_tracks(query, limit)
+
+
+def test_playlist_survives_search_error_on_one_track():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s1",
+                        "title": "Heartless",
+                        "subtitle": "Kanye West",
+                        "duration": 200000,
+                    },
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = FlakySearchQobuz(
+        "Kanye West Heartless",
+        tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]},
+    )
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert [t.id for t in result.tracks] == ["q1"]
+    assert len(result.unmatched) == 1
+    assert result.unmatched[0].title == "Heartless"
 
 
 def test_playlist_matches_track_by_track():
@@ -507,3 +790,134 @@ def test_playlist_with_no_matches_is_unmatched_keeps_position_stamping():
 
     assert isinstance(result, Matched)
     assert result.tracks[0].collection == "Named Mix"
+
+
+class FakeTidalSource:
+    """Source-shaped stand-in for the catalog's tidal entry."""
+
+    name = "tidal"
+
+    def __init__(self, candidates):
+        self._candidates = list(candidates)
+
+    def search_tracks(self, query, limit):
+        return list(self._candidates)
+
+    def qualities(self, track):
+        from qobuz_downloader.domain import Quality
+
+        return [Quality.LOSSY, Quality.CD]
+
+    def stream(self, track, quality):
+        raise NotImplementedError
+
+    def cover_url(self, track):
+        return None
+
+
+TIDAL_TRACK = Track(
+    id="t1",
+    title="Ashfall",
+    artist="Hamed Mohammadi",
+    album="Ashfall",
+    track_number=1,
+    duration_seconds=200,
+)
+
+
+def make_catalog_matcher(qobuz, client, sources):
+    from qobuz_downloader.match._catalog import Catalog
+    from qobuz_downloader.source import QobuzSource
+
+    matcher = make_matcher(qobuz, client)
+    matcher._catalog = Catalog([QobuzSource(qobuz), *sources])
+    return matcher
+
+
+def test_tidal_fallback_rescues_qobuz_missing_playlist_track():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s1",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Ashfall",
+                        "subtitle": "Hamed Mohammadi",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = FakeQobuz(tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]})
+    matcher = make_catalog_matcher(
+        qobuz,
+        client,
+        [FakeTidalSource([replace(TIDAL_TRACK, id="t9")])],
+    )
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert [t.id for t in result.tracks] == ["q1", "tidal:t9"]
+    assert result.unmatched == []
+
+
+def test_tidal_fallback_track_keeps_playlist_position():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Ashfall",
+                        "subtitle": "Hamed Mohammadi",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = FakeQobuz()
+    matcher = make_catalog_matcher(
+        qobuz, client, [FakeTidalSource([replace(TIDAL_TRACK, id="t9")])]
+    )
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert result.tracks[0].track_number == 1
+    assert result.tracks[0].id == "tidal:t9"
+
+
+def test_no_fallback_source_match_leaves_track_unmatched():
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Ashfall",
+                        "subtitle": "Hamed Mohammadi",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = FakeQobuz()
+    matcher = make_catalog_matcher(qobuz, client, [FakeTidalSource([])])
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Unmatched)
+    assert "none of 1 tracks matched" in result.reason

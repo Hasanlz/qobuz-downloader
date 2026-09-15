@@ -3,12 +3,13 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from qobuz_downloader.domain import Quality, Stream, Track
+from qobuz_downloader.domain import Quality, Stream, Track, renumber
 from qobuz_downloader.match.live import _THRESHOLD, _score_track
 from qobuz_downloader.tidal._interface import Tidal
 
@@ -46,42 +47,86 @@ class LiveTidal(Tidal):
         self._refresh_token = ""
         self._expires_at = 0.0
         self._country = "US"
+        self._tags_cache: dict[str, list[str]] = {}
         self._load_cache()
 
     # -- matching ---------------------------------------------------------
 
+    def search_tracks(self, query: str, limit: int) -> list[Track]:
+        """Catalog search via the public partner token — no login needed."""
+        return [self._candidate(item) for item in self._search_raw(query, limit)]
+
     def hires_match_for(self, track: Track) -> str | None:
+        best: Track | None = None
+        best_score = 0.0
+        for item in self._search_raw(f"{track.artist} {track.title}", 20):
+            tags = item.get("mediaMetadata", {}).get("tags", [])
+            if "HIRES_LOSSLESS" not in tags:
+                continue
+            candidate = self._candidate(item)
+            score = _score_track(track, candidate)
+            if score > best_score:
+                best, best_score = candidate, score
+        if best is None or best_score < _THRESHOLD:
+            return None
+        log.info(
+            "tidal match for %s - %s: %s (hires)",
+            track.artist,
+            track.title,
+            best.title,
+        )
+        return best.id
+
+    def _search_raw(self, query: str, limit: int) -> list[dict[str, Any]]:
         response = self._http.get(
             _API + "search",
             params={
-                "query": f"{track.artist} {track.title}",
-                "limit": 20,
+                "query": query,
+                "limit": limit,
                 "types": "tracks",
                 "countryCode": self._country,
             },
             headers={"X-Tidal-Token": _PARTNER_TOKEN},
         )
         response.raise_for_status()
-        items = response.json().get("tracks", {}).get("items", [])
-        best: dict[str, Any] | None = None
-        best_score = 0.0
-        for item in items:
-            tags = item.get("mediaMetadata", {}).get("tags", [])
-            if "HIRES_LOSSLESS" not in tags:
-                continue
-            score = _score_track(track, self._candidate(item))
-            if score > best_score:
-                best, best_score = item, score
-        if best is None or best_score < _THRESHOLD:
-            return None
-        log.info(
-            "tidal match for %s - %s: %s (%s)",
-            track.artist,
-            track.title,
-            best.get("title"),
-            ",".join(best.get("mediaMetadata", {}).get("tags", [])),
+        return response.json().get("tracks", {}).get("items", [])
+
+    def qualities(self, tidal_track_id: str) -> list[Quality]:
+        """Quality ladder from the track's mediaMetadata tags.
+
+        Tags carry LOSSLESS / HIRES_LOSSLESS without needing the user's
+        subscription, which is all the engine needs to pick a rung
+        before stream time.
+        """
+        response = self._http.get(
+            _API + f"tracks/{tidal_track_id}",
+            params={"countryCode": self._country},
+            headers={"X-Tidal-Token": _PARTNER_TOKEN},
         )
-        return str(best["id"])
+        response.raise_for_status()
+        item = response.json()
+        if item.get("status") == 404 or "id" not in item:
+            raise RuntimeError(f"tidal track {tidal_track_id} not found")
+        ladder = [Quality.LOSSY, Quality.CD]
+        if "HIRES_LOSSLESS" in item.get("mediaMetadata", {}).get("tags", []):
+            ladder.extend([Quality.HIRES_96, Quality.HIRES_192])
+        return ladder
+
+    def cover_url(self, tidal_track_id: str) -> str | None:
+        try:
+            response = self._http.get(
+                _API + f"tracks/{tidal_track_id}",
+                params={"countryCode": self._country},
+                headers={"X-Tidal-Token": _PARTNER_TOKEN},
+            )
+            response.raise_for_status()
+            item = response.json()
+            cover = (item.get("album") or {}).get("cover")
+            if not cover:
+                return None
+            return f"https://resources.tidal.com/images/{cover.replace('-', '/')}/orig.jpg"
+        except Exception:
+            return None
 
     @staticmethod
     def _candidate(item: dict[str, Any]) -> Track:
@@ -89,13 +134,76 @@ class LiveTidal(Tidal):
             id=str(item["id"]),
             title=item.get("title", ""),
             artist=(item.get("artists") or [{}])[0].get("name", ""),
-            album=(item.get("album") or {}).get("title", ""),
+            album=(item.get("album") or {}).get("title", "")
+            or item.get("albumTitle", ""),
             duration_seconds=item.get("duration"),
         )
+
+    # -- native URLs ------------------------------------------------------
+
+    def native_tracks(self, kind: str, native_id: str) -> list[Track]:
+        """Tracks behind a tidal.com track/album/playlist link.
+
+        Metadata only (public partner token) — the login is needed to
+        stream, which the engine handles at download time.
+        """
+        if kind == "track":
+            return [self._candidate(self._get(f"tracks/{native_id}"))]
+        if kind == "album":
+            album = self._get(f"albums/{native_id}")
+            items = self._get_items(f"albums/{native_id}/tracks")
+            name = album.get("title", "")
+            return [
+                replace(
+                    self._candidate(item),
+                    track_number=item.get("trackNumber"),
+                    collection=name,
+                    track_total=album.get("numberOfItems") or len(items),
+                )
+                for item in items
+            ]
+        if kind == "playlist":
+            playlist = self._get(f"playlists/{native_id}")
+            items = self._get_items(f"playlists/{native_id}/tracks")
+            collected = [self._candidate(item) for item in items]
+            return renumber(
+                collected, collection=playlist.get("name", "") or "playlist"
+            )
+        raise ValueError(f"unsupported tidal URL kind: {kind}")
+
+    def _get_items(self, path: str, page_size: int = 100) -> list[dict[str, Any]]:
+        """Collect a paginated list resource (albums/.../tracks, etc.)."""
+        items: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            payload = self._get(path, limit=page_size, offset=offset)
+            batch = payload.get("items", [])
+            items.extend(batch)
+            total = payload.get("totalNumberOfItems", len(items))
+            offset += len(batch)
+            if not batch or offset >= total:
+                return items
+
+    def _get(self, path: str, **extra: Any) -> Any:
+        response = self._http.get(
+            _API + path,
+            params={"countryCode": self._country, **extra},
+            headers={"X-Tidal-Token": _PARTNER_TOKEN},
+        )
+        response.raise_for_status()
+        return response.json()
 
     # -- streaming --------------------------------------------------------
 
     def stream(self, tidal_track_id: str) -> Stream:
+        if not self.has_login():
+            # matching (search) needs no login, so tidal tracks can be
+            # queued before the user ever logs in; downloading them is
+            # what needs the one-time device login
+            raise RuntimeError(
+                "tidal login needed — run once with --tidal to trigger the"
+                " browser login, then re-run to download pending tracks"
+            )
         self.ensure_login()
         response = self._http.get(
             _API + f"tracks/{tidal_track_id}/playbackinfopostpaywall",
@@ -127,6 +235,12 @@ class LiveTidal(Tidal):
         )
 
     # -- auth -------------------------------------------------------------
+
+    def has_login(self) -> bool:
+        """A usable (cached) login exists without triggering the device flow."""
+        return bool(
+            self._access_token and self._expires_at - time.time() > _REFRESH_MARGIN
+        ) or bool(self._refresh_token)
 
     def ensure_login(self) -> None:
         if self._access_token and self._expires_at - time.time() > _REFRESH_MARGIN:

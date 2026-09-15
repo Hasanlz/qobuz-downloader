@@ -46,11 +46,14 @@ class Playlist:
 type Item = Track | Album | Artist | Playlist
 
 
-def renumber(tracks: Iterable[Track]) -> list[Track]:
+def renumber(
+    tracks: Iterable[Track], collection: str | None = None
+) -> list[Track]:
     """Replace each track's album track number with its position in the list.
 
     Used when the source is a playlist: the number reflects where the track
     sits in the playlist, not where it sits on its original album.
+    ``collection`` overrides each track's collection (the playlist name).
     """
     tracks = list(tracks)
     total = len(tracks)
@@ -62,7 +65,7 @@ def renumber(tracks: Iterable[Track]) -> list[Track]:
             album=track.album,
             track_number=position,
             duration_seconds=track.duration_seconds,
-            collection=track.collection,
+            collection=collection or track.collection,
             track_total=total,
         )
         for position, track in enumerate(tracks, start=1)
@@ -75,6 +78,10 @@ class Stream:
     quality: Quality
     sampling_rate: float | None = None
     bit_depth: int | None = None
+    # A platform-specific byte source the engine should stream through
+    # instead of plain HTTP (Deezer's decrypting source; ADR 0002).
+    # Optional to keep plain-HTTP sources (Qobuz, Tidal) unchanged.
+    byte_source: object | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)

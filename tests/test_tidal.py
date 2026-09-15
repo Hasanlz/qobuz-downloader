@@ -309,3 +309,74 @@ def test_stream_rejects_non_bts_manifest(tmp_path):
     except RuntimeError as error:
         raised = "unsupported" in str(error)
     assert raised
+
+
+# -- native URLs --------------------------------------------------------
+
+
+def test_native_track_link(tmp_path):
+    def routes(request):
+        assert request.url.path.endswith("/tracks/180042924")
+        return httpx.Response(
+            200,
+            json={
+                "id": 180042924,
+                "title": "Song",
+                "duration": 200,
+                "artists": [{"name": "Artist"}],
+                "album": {"title": "Album"},
+            },
+        )
+
+    tidal = make_tidal(routes, tmp_path / "tidal.json")
+    tracks = tidal.native_tracks("track", "180042924")
+    assert [(t.id, t.title) for t in tracks] == [("180042924", "Song")]
+
+
+def test_native_album_link_sets_collection(tmp_path):
+    def routes(request):
+        if request.url.path.endswith("/albums/99"):
+            return httpx.Response(
+                200, json={"id": 99, "title": "Album", "numberOfItems": 2}
+            )
+        if request.url.path.endswith("/albums/99/tracks"):
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {"id": 1, "title": "One", "duration": 60,
+                         "artists": [{"name": "A"}], "trackNumber": 1},
+                        {"id": 2, "title": "Two", "duration": 60,
+                         "artists": [{"name": "A"}], "trackNumber": 2},
+                    ],
+                    "totalNumberOfItems": 2,
+                },
+            )
+        return httpx.Response(404)
+
+    tidal = make_tidal(routes, tmp_path / "tidal.json")
+    tracks = tidal.native_tracks("album", "99")
+    assert [t.collection for t in tracks] == ["Album", "Album"]
+    assert [t.track_number for t in tracks] == [1, 2]
+
+
+def test_native_playlist_link_renumbers_and_pages(tmp_path):
+    def routes(request):
+        if request.url.path.endswith("/playlists/77"):
+            return httpx.Response(200, json={"id": 77, "name": "Mix"})
+        if request.url.path.endswith("/playlists/77/tracks"):
+            offset = int(request.url.params["offset"])
+            batch = (
+                [{"id": 10 + offset, "title": f"T{offset}", "duration": 60,
+                  "artists": [{"name": "A"}]}]
+                if offset < 2 else []
+            )
+            return httpx.Response(
+                200, json={"items": batch, "totalNumberOfItems": 2}
+            )
+        return httpx.Response(404)
+
+    tidal = make_tidal(routes, tmp_path / "tidal.json")
+    tracks = tidal.native_tracks("playlist", "77")
+    assert [t.track_number for t in tracks] == [1, 2]
+    assert [t.collection for t in tracks] == ["Mix", "Mix"]
