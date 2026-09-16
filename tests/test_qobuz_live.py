@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from qobuz_downloader.qobuz import LiveQobuz
 
@@ -86,3 +87,124 @@ def test_single_track_has_no_collection():
     assert len(tracks) == 1
     assert tracks[0].collection is None
     assert tracks[0].track_number == 6
+
+
+class _RecordingTransport:
+    """MockTransport that records each attempt and yields scripted replies."""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.attempts = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.attempts += 1
+        reply = self._replies[min(self.attempts - 1, len(self._replies) - 1)]
+        return reply
+
+
+def make_flaky_qobuz(replies):
+    transport = _RecordingTransport(replies)
+    qobuz = LiveQobuz(sleep=lambda _: None)
+    qobuz._http = httpx.Client(transport=httpx.MockTransport(transport))
+    return qobuz, transport
+
+
+def test_call_retries_transient_http_error():
+    """A 400 from Qobuz's degraded search backend is retried, not fatal.
+
+    The run that dropped tracks turned a transient
+    "Impossible to connect, please check your Algolia Application Id"
+    400 into a permanent "no match".
+    """
+    qobuz, transport = make_flaky_qobuz(
+        [
+            httpx.Response(400, json={"error": "Impossible to connect"}),
+            httpx.Response(200, json={"ok": True}),
+        ]
+    )
+
+    assert qobuz._call("track/search", query="Kanye West Heartless") == {"ok": True}
+    assert transport.attempts == 2
+
+
+def test_call_retries_server_error():
+    qobuz, transport = make_flaky_qobuz(
+        [
+            httpx.Response(503, json={}),
+            httpx.Response(502, json={}),
+            httpx.Response(200, json={"ok": True}),
+        ]
+    )
+
+    assert qobuz._call("album/search", query="x") == {"ok": True}
+    assert transport.attempts == 3
+
+
+def test_call_does_not_retry_client_error():
+    """A genuinely bad request (404) is a real answer, not a blip."""
+    qobuz, transport = make_flaky_qobuz([httpx.Response(404, json={})])
+
+    with pytest.raises(RuntimeError, match="404"):
+        qobuz._call("track/get", track_id="nope")
+    assert transport.attempts == 1
+
+
+def test_call_raises_with_status_when_persistently_failing():
+    qobuz, transport = make_flaky_qobuz(
+        [httpx.Response(400, json={"error": "Algolia down"})]
+    )
+
+    with pytest.raises(RuntimeError, match="track/search"):
+        qobuz._call("track/search", query="Kanye West Heartless")
+    assert transport.attempts == 3
+
+
+def test_call_retries_transport_error():
+    def handler(request):
+        raise httpx.ConnectError("boom", request=request)
+
+    qobuz = LiveQobuz(sleep=lambda _: None)
+    qobuz._http = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(RuntimeError):
+        qobuz._call("album/get", album_id="1")
+
+
+def test_call_retries_429_then_gives_up():
+    """429 is retried (throttle), still giving up after all attempts."""
+    qobuz, transport = make_flaky_qobuz([httpx.Response(429, json={})])
+
+    with pytest.raises(RuntimeError, match="429"):
+        qobuz._call("track/search", query="x")
+    assert transport.attempts == 3
+
+
+def test_call_backs_off_between_attempts():
+    """Retries spread out instead of hammering an already-degraded API."""
+    sleeps = []
+    qobuz = LiveQobuz(sleep=sleeps.append)
+    qobuz._http = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, json={})
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        qobuz._call("track/search", query="x")
+
+    assert sleeps == [0.5, 1.0]
+
+
+def test_call_honours_retry_after_header():
+    sleeps = []
+    qobuz = LiveQobuz(sleep=sleeps.append)
+    qobuz._http = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(429, headers={"Retry-After": "3"}, json={})
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        qobuz._call("track/search", query="x")
+
+    assert sleeps == [3.0, 3.0]

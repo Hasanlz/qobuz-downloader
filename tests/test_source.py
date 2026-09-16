@@ -1,3 +1,5 @@
+import pytest
+
 from qobuz_downloader.domain import Complete, Failed, Quality, Stream, Track
 from qobuz_downloader.engine import Engine
 from qobuz_downloader.match._catalog import Catalog, stamped
@@ -170,6 +172,81 @@ def test_qobuz_strategy_is_used_for_qobuz_entry():
     resolved = catalog.resolve(SPOTIFY, strategy)
     assert resolved.id == "55"
     assert calls == [SPOTIFY]
+
+
+class FailingSource(Source):
+    """A source whose search backend is degraded (every call 400s)."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def search_tracks(self, query, limit):
+        raise RuntimeError(f"{self.name} search failed after 3 attempts: Algolia down")
+
+    def qualities(self, track):
+        raise RuntimeError(f"{self.name} unavailable")
+
+    def stream(self, track, quality):
+        raise NotImplementedError
+
+    def cover_url(self, track):
+        return None
+
+
+def test_failing_source_falls_through_to_next():
+    """A Tidal blip must not hide a track the next source carries."""
+    catalog = Catalog(
+        [
+            FakeSource("qobuz", []),
+            FailingSource("tidal"),
+            FakeSource("deezer", [tidal_candidate()]),
+        ]
+    )
+
+    resolved = catalog.resolve(SPOTIFY, lambda track: (None, 0.0))
+
+    assert resolved is not None
+    assert resolved.id == "deezer:233554206"
+
+
+def test_failing_qobuz_strategy_falls_through_to_next():
+    """A Qobuz backend outage fails through to a source that has it."""
+    catalog = Catalog([FakeSource("qobuz", []), FakeSource("tidal", [tidal_candidate()])])
+
+    def broken_strategy(track):
+        raise RuntimeError("qobuz search failed after 3 attempts: Algolia down")
+
+    resolved = catalog.resolve(SPOTIFY, broken_strategy)
+
+    assert resolved is not None
+    assert resolved.id == "tidal:233554206"
+
+
+def test_all_sources_failing_raises_retryable_not_clean_miss():
+    """If every source errored, the miss is not trustworthy."""
+    catalog = Catalog([FakeSource("qobuz", []), FailingSource("tidal")])
+
+    def broken_strategy(track):
+        raise RuntimeError("qobuz search failed after 3 attempts: Algolia down")
+
+    with pytest.raises(RuntimeError, match="Algolia down"):
+        catalog.resolve(SPOTIFY, broken_strategy)
+
+
+def test_resolve_best_failing_source_still_uses_other():
+    catalog = Catalog([FailingSource("tidal"), FakeSource("deezer", [tidal_candidate()])])
+
+    resolved = catalog.resolve_best(SPOTIFY, lambda track: (None, 0.0))
+
+    assert resolved is not None
+    assert resolved.id == "deezer:233554206"
+
+
+def test_resolve_best_all_failing_raises():
+    catalog = Catalog([FailingSource("tidal"), FailingSource("deezer")])
+
+    with pytest.raises(RuntimeError, match="Algolia down"):
+        catalog.resolve_best(SPOTIFY, lambda track: (None, 0.0))
 
 
 # -- engine dispatch ----------------------------------------------------

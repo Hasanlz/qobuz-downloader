@@ -1,5 +1,7 @@
 import hashlib
+import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -18,9 +20,21 @@ from qobuz_downloader.qobuz._interface import Qobuz
 from qobuz_downloader.qobuz._secrets import fetch_app_credentials
 from qobuz_downloader.qobuz._urls import parse
 
+log = logging.getLogger(__name__)
+
 _BASE = "https://www.qobuz.com/api.json/0.2/"
 _PAGE_SIZE = 500
 _TEST_TRACK_ID = "5966783"
+_ATTEMPTS = 3
+_BACKOFF_SECONDS = 0.5
+_MAX_RETRY_AFTER = 10.0
+# Qobuz's search backend intermittently 400s ("Impossible to connect,
+# please check your Algolia Application Id") and 5xx/429s while
+# degraded. These are transient: retrying the same query usually
+# succeeds. The 400 is Algolia's "I can't reach my search backend" — a
+# degraded signal, not a bad request, so it is retried too. Other 4xx
+# (404, 401, ...) are definitive answers and stay fatal.
+_RETRYABLE_STATUS = {400, 429, 500, 502, 503, 504}
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0",
     "Content-Type": "application/json;charset=UTF-8",
@@ -41,15 +55,35 @@ def _display_name(value: Any) -> str:
 
 
 class LiveQobuz(Qobuz):
-    def __init__(self) -> None:
+    def __init__(
+        self, sleep: Callable[[float], None] = time.sleep
+    ) -> None:
         self._http = httpx.Client(
             headers=dict(_HEADERS),
             follow_redirects=True,
             timeout=httpx.Timeout(30.0, read=60.0),
         )
+        self._sleep = sleep
         self._secret = ""
         self._tracks: dict[str, list[Track]] = {}
         self._raw: dict[str, dict[str, Any]] = {}
+
+    def _backoff(self, attempt: int, retry_after: str | None = None) -> None:
+        """Small exponential gap before the next attempt.
+
+        Retrying back-to-back during an outage is how a degraded search
+        backend stays degraded; a pause lets it recover and spreads our
+        load. A server-supplied Retry-After wins when present (capped so
+        one stale header cannot stall a whole playlist). Deliberately
+        modest: worst case (persistent 400) the extra latency is ~1.75s.
+        """
+        delay = _BACKOFF_SECONDS * (2 ** (attempt - 1))
+        if retry_after:
+            try:
+                delay = max(delay, min(float(retry_after), _MAX_RETRY_AFTER))
+            except ValueError:
+                pass
+        self._sleep(delay)
 
     @classmethod
     def from_token(
@@ -183,15 +217,53 @@ class LiveQobuz(Qobuz):
         return image.get("large") or image.get("medium") or image.get("small")
 
     def _call(self, endpoint: str, **params: Any) -> dict[str, Any]:
+        last_status: int | None = None
         last_error: Exception | None = None
-        for _ in range(3):
+        attempts = 0
+        for attempt in range(1, _ATTEMPTS + 1):
+            attempts = attempt
+            retry_after = None
             try:
                 response = self._http.get(_BASE + endpoint, params=params)
-                response.raise_for_status()
-                return response.json()
             except (httpx.TimeoutException, httpx.TransportError) as error:
+                log.warning(
+                    "    qobuz %s attempt %d %s: %s",
+                    endpoint, attempt, type(error).__name__, error,
+                )
                 last_error = error
-        raise RuntimeError(f"{endpoint} failed after 3 attempts: {last_error}")
+            else:
+                if response.status_code in _RETRYABLE_STATUS:
+                    # Qobuz 400s/429s/5xxs while its search backend is
+                    # degraded; retry the same request rather than turn a
+                    # blip into "no match".
+                    last_status = response.status_code
+                    retry_after = response.headers.get("Retry-After")
+                    last_error = RuntimeError(
+                        f"HTTP {response.status_code}: {response.text.strip()[:200]}"
+                    )
+                    log.warning(
+                        "    qobuz %s attempt %d HTTP %s (retryable): %s",
+                        endpoint,
+                        attempt,
+                        response.status_code,
+                        response.text.strip()[:200],
+                    )
+                elif response.status_code >= 400:
+                    # A definitive answer (404, 401, ...): retrying a
+                    # real status would only waste time.
+                    raise RuntimeError(
+                        f"{endpoint} failed: HTTP {response.status_code}:"
+                        f" {response.text.strip()[:200]}"
+                    )
+                else:
+                    return response.json()
+            if attempt < _ATTEMPTS:
+                self._backoff(attempt, retry_after)
+        raise RuntimeError(
+            f"{endpoint} failed after {attempts} attempt(s)"
+            + (f" (last HTTP {last_status})" if last_status else "")
+            + f": {last_error}"
+        )
 
     def _playlist(
         self, playlist_id: str, collection: str | None = None

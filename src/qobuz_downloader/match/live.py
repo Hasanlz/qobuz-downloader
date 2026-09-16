@@ -262,6 +262,7 @@ class LiveSpotify(Matcher):
             queries.append(f"{spotify_track.artist} {cleaned}")
         best: Track | None = None
         best_score = 0.0
+        failure: Exception | None = None
         for query in queries:
             try:
                 candidates = self._qobuz.search_tracks(query, limit=20)
@@ -272,8 +273,11 @@ class LiveSpotify(Matcher):
                     candidates = self._qobuz.search_tracks(query, limit=20)
             except (httpx.HTTPError, RuntimeError) as error:
                 # Qobuz's search backend 400s/hangs on a few queries; lose
-                # this source for the track, not the whole playlist.
+                # this source for the track, not the whole playlist. Keep the
+                # error: if nothing matches below it must surface as a
+                # retryable search failure, not as "not on Qobuz".
                 log.warning("    qobuz search failed for %r: %s", query, error)
+                failure = failure or error
                 candidates = []
             for candidate in candidates:
                 score = _score_track(spotify_track, candidate)
@@ -287,6 +291,14 @@ class LiveSpotify(Matcher):
                 best, best_score = self._best_from_album(spotify_track)
             except (httpx.HTTPError, RuntimeError) as error:
                 log.warning("    qobuz album search failed: %s", error)
+                failure = failure or error
+        if best_score < _THRESHOLD and failure is not None:
+            # Every route to this track failed on the backend. Reporting a
+            # clean miss here is what silently dropped recoverable tracks
+            # from a degraded run; raise so the caller marks it retryable.
+            raise RuntimeError(
+                f"search failed for {spotify_track.artist} - {spotify_track.title}: {failure}"
+            ) from failure
         return best, best_score
 
     def _best_from_album(self, spotify_track: Track) -> tuple[Track | None, float]:

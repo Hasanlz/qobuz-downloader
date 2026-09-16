@@ -481,6 +481,8 @@ def test_playlist_survives_search_error_on_one_track():
     assert [t.id for t in result.tracks] == ["q1"]
     assert len(result.unmatched) == 1
     assert result.unmatched[0].title == "Heartless"
+    # ...and the miss is marked retryable, not as a clean catalog miss
+    assert "search error" in result.unmatched[0].reason
 
 
 def test_playlist_matches_track_by_track():
@@ -514,6 +516,70 @@ def test_playlist_matches_track_by_track():
     assert [t.id for t in result.tracks] == ["q1"]
     assert len(result.unmatched) == 1
     assert result.unmatched[0].title == "Unheard Noise"
+
+
+class SelectivelyFailingQobuz(FakeQobuz):
+    """Every search for the poison artist fails; others resolve."""
+
+    def __init__(self, poison_artist, **kwargs):
+        super().__init__(**kwargs)
+        self.poison_artist = poison_artist
+
+    def search_tracks(self, query, limit):
+        if query.startswith(self.poison_artist):
+            raise RuntimeError(
+                "track/search failed after 3 attempts (last HTTP 400): Algolia down"
+            )
+        return super().search_tracks(query, limit)
+
+    def search_albums(self, query, limit):
+        if query.startswith(self.poison_artist):
+            raise RuntimeError(
+                "album/search failed after 3 attempts (last HTTP 400): Algolia down"
+            )
+        return super().search_albums(query, limit)
+
+
+def test_persistent_search_error_is_reported_not_a_clean_miss():
+    """A backend outage must read as retryable, not as 'not on Qobuz'.
+
+    The original run turned a transient Algolia 400 into "no Qobuz +
+    Deezer match", which is indistinguishable from a real catalog miss
+    and so was never retried. The reason must say "search error".
+    """
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s1",
+                        "title": "My Heart Is Broken",
+                        "subtitle": "Evanescence",
+                        "duration": 200000,
+                    },
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = SelectivelyFailingQobuz(
+        "Evanescence",
+        tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]},
+    )
+    matcher = make_matcher(qobuz, client)
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert [t.id for t in result.tracks] == ["q1"]
+    assert len(result.unmatched) == 1
+    assert "search error" in result.unmatched[0].reason
 
 
 def test_playlist_numbers_tracks_by_position():
@@ -921,3 +987,69 @@ def test_no_fallback_source_match_leaves_track_unmatched():
 
     assert isinstance(result, Unmatched)
     assert "none of 1 tracks matched" in result.reason
+
+
+def test_qobuz_outage_falls_through_to_tidal():
+    """Qobuz's search backend being down must not lose a Tidal track."""
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Ashfall",
+                        "subtitle": "Hamed Mohammadi",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = SelectivelyFailingQobuz("Hamed Mohammadi")
+    matcher = make_catalog_matcher(
+        qobuz, client, [FakeTidalSource([replace(TIDAL_TRACK, id="t9")])]
+    )
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert [t.id for t in result.tracks] == ["tidal:t9"]
+    assert result.unmatched == []
+
+
+def test_qobuz_outage_with_no_fallback_reports_search_error():
+    """Nothing carries it and Qobuz errored: retryable, not a clean miss."""
+    client = embed_client(
+        {
+            "/playlist/": {
+                "name": "Mix",
+                "trackList": [
+                    {
+                        "uri": "spotify:track:s1",
+                        "title": "Ashfall",
+                        "subtitle": "Hamed Mohammadi",
+                        "duration": 200000,
+                    },
+                    {
+                        "uri": "spotify:track:s2",
+                        "title": "Blinding Lights",
+                        "subtitle": "The Weeknd",
+                        "duration": 200000,
+                    },
+                ],
+            }
+        }
+    )
+    qobuz = SelectivelyFailingQobuz(
+        "Hamed Mohammadi",
+        tracks_by_query={"The Weeknd Blinding Lights": [QOBUZ_TRACK]},
+    )
+    matcher = make_catalog_matcher(qobuz, client, [FakeTidalSource([])])
+
+    result = matcher.match("https://open.spotify.com/playlist/p1")
+
+    assert isinstance(result, Matched)
+    assert [t.id for t in result.tracks] == ["q1"]
+    assert len(result.unmatched) == 1
+    assert "search error" in result.unmatched[0].reason

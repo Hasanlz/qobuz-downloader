@@ -17,6 +17,8 @@ Modes (the `--source` flag):
 import logging
 from dataclasses import replace
 
+import httpx
+
 from qobuz_downloader.domain import Quality, Track
 from qobuz_downloader.match.live import _THRESHOLD, _clean_title, _score_track
 from qobuz_downloader.source import Source, qualify
@@ -51,11 +53,26 @@ class Catalog:
         self._allow_lossy = allow_lossy
 
     def resolve(self, spotify_track: Track, qobuz_strategy) -> Track | None:
-        """First source carrying the track wins; the rest are fallbacks."""
+        """First source carrying the track wins; the rest are fallbacks.
+
+        A source that errors (its backend is degraded) is skipped in
+        favour of the next one — a blip on Qobuz must not hide a track
+        that Tidal carries. If no source resolves and at least one
+        errored, the first error is re-raised so the miss is reported as
+        a retryable search failure rather than a clean "not found".
+        """
+        first_error: Exception | None = None
         for source in self._sources:
-            candidate = self._resolve_on(source, spotify_track, qobuz_strategy)
+            try:
+                candidate = self._resolve_on(source, spotify_track, qobuz_strategy)
+            except (httpx.HTTPError, RuntimeError) as error:
+                log.warning("    %s resolution failed: %s", source.name, error)
+                first_error = first_error or error
+                continue
             if candidate is not None:
                 return candidate
+        if first_error is not None:
+            raise first_error
         return None
 
     def resolve_best(
@@ -64,8 +81,14 @@ class Catalog:
         """Search every source and keep the highest-quality copy."""
         best: Track | None = None
         best_key: tuple[int, float, int] | None = None
+        first_error: Exception | None = None
         for order, source in enumerate(self._sources):
-            candidate = self._resolve_on(source, spotify_track, qobuz_strategy)
+            try:
+                candidate = self._resolve_on(source, spotify_track, qobuz_strategy)
+            except (httpx.HTTPError, RuntimeError) as error:
+                log.warning("    %s resolution failed: %s", source.name, error)
+                first_error = first_error or error
+                continue
             if candidate is None:
                 continue
             score = _score_track(spotify_track, candidate)
@@ -73,6 +96,8 @@ class Catalog:
             key = (int(quality), score, -order)
             if best_key is None or key > best_key:
                 best, best_key = candidate, key
+        if best is None and first_error is not None:
+            raise first_error
         return best
 
     def _resolve_on(
@@ -93,15 +118,12 @@ class Catalog:
         best: Track | None = None
         best_score = 0.0
         for query in queries:
-            try:
+            # A source error propagates: `resolve`/`resolve_best` try the
+            # next source and only report if nothing resolves, so a Tidal
+            # blip cannot mask a track Qobuz carries.
+            candidates = source.search_tracks(query, limit=20)
+            if not candidates:
                 candidates = source.search_tracks(query, limit=20)
-                if not candidates:
-                    candidates = source.search_tracks(query, limit=20)
-            except Exception as error:
-                log.warning(
-                    "    %s search failed for %r: %s", source.name, query, error
-                )
-                return None
             for candidate in candidates:
                 score = _score_track(spotify_track, candidate)
                 if score > best_score:
@@ -110,11 +132,9 @@ class Catalog:
             return None
         if not self._allow_lossy:
             # A lossless copy must exist somewhere: don't queue a source
-            # that can only deliver lossy audio for this track
-            try:
-                ladder = source.qualities(stamped(best, source.name))
-            except Exception:
-                return None
+            # that can only deliver lossy audio for this track. A failed
+            # probe propagates (retryable) rather than looking lossy-only.
+            ladder = source.qualities(stamped(best, source.name))
             if Quality.CD not in ladder:
                 log.info(
                     "    %s only has lossy audio for this track; skipping",
