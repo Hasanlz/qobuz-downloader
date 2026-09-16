@@ -11,6 +11,8 @@ import re
 import shutil
 import subprocess
 import threading
+
+from .player import WINDOWS, detach_kwargs
 from collections import deque
 
 _RMS_RE = re.compile(r"lavfi\.astats\.Overall\.RMS_level=(-?[\d.]+|-inf)")
@@ -49,7 +51,7 @@ class Spectrum:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=True,
+            **detach_kwargs(),
         )
         self._thread = threading.Thread(target=self._read, daemon=True, name="quaver-spectrum")
         self._thread.start()
@@ -74,9 +76,14 @@ class Spectrum:
         self._stop.set()
         if self._proc is not None and self._proc.poll() is None:
             try:
-                self._proc.kill()
-            except OSError:
-                pass
+                self._proc.terminate()
+                if not WINDOWS:
+                    self._proc.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    self._proc.kill()
+                except OSError:
+                    pass
         self._proc = None
 
     def close(self) -> None:

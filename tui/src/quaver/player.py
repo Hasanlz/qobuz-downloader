@@ -1,7 +1,8 @@
-"""Audio playback for downloaded tracks.
+"""Cross-platform player backends: mpv (IPC), ffplay (signals), silent stub.
 
-Prefers mpv (rich IPC control), falls back to ffplay (pause via SIGSTOP/SIGCONT,
-no seek/volume), and degrades to a silent stub when neither exists.
+POSIX gives full control (SIGSTOP/SIGCONT pause, mpv JSON IPC over a unix
+socket). Windows gets playback + terminate (no process suspend); mpv IPC there
+goes over the named pipe mpv creates.
 """
 
 from __future__ import annotations
@@ -13,9 +14,23 @@ import signal
 import socket
 import subprocess
 import tempfile
+import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+
+WINDOWS = os.name == "nt"
+
+
+def detach_kwargs() -> dict:
+    """Popen kwargs that detach the child from the terminal's Ctrl+C."""
+    if WINDOWS:
+        # DETACHED_PROCESS: no console; CREATE_NEW_PROCESS_GROUP: ^C immune
+        return {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS
+        }
+    return {"start_new_session": True}
 
 
 @dataclass
@@ -30,6 +45,8 @@ class PlayerState:
 
 class NullPlayer:
     """No playable backend available."""
+
+    supports_pause = False
 
     def __init__(self) -> None:
         self.state = PlayerState()
@@ -54,12 +71,16 @@ class NullPlayer:
 
 
 class MpvPlayer:
-    """mpv driven over its JSON IPC socket."""
+    """mpv driven over its JSON IPC channel (unix socket or Windows named pipe)."""
+
+    supports_pause = True
 
     def __init__(self) -> None:
-        self._sock_path = os.path.join(
-            tempfile.gettempdir(), f"quaver-mpv-{os.getpid()}.sock"
-        )
+        name = f"quaver-mpv-{os.getpid()}"
+        if WINDOWS:
+            self._target = rf"\\.\pipe\{name}"
+        else:
+            self._target = os.path.join(tempfile.gettempdir(), f"{name}.sock")
         self._proc: subprocess.Popen | None = None
         self.state = PlayerState(backend="mpv")
         self._start_mpv()
@@ -71,29 +92,48 @@ class MpvPlayer:
                 "--no-video",
                 "--idle=yes",
                 "--keep-open=no",
-                f"--input-ipc-server={self._sock_path}",
+                f"--input-ipc-server={self._target}",
                 "--msg-level=all=no",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            **detach_kwargs(),
         )
         for _ in range(50):
-            if os.path.exists(self._sock_path):
+            if self._target_available():
                 return
             time.sleep(0.1)
 
+    def _target_available(self) -> bool:
+        if WINDOWS:
+            try:
+                handle = os.open(self._target, os.O_RDWR)
+            except OSError:
+                return False
+            os.close(handle)
+            return True
+        return os.path.exists(self._target)
+
     def _command(self, command: list) -> dict | None:
-        if not os.path.exists(self._sock_path):
-            return None
+        payload = (json.dumps({"command": command}) + "\n").encode()
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.5)
-                sock.connect(self._sock_path)
-                sock.sendall((json.dumps({"command": command}) + "\n").encode())
-                data = sock.recv(4096).decode()
-            return json.loads(data.splitlines()[0]) if data else None
-        except (OSError, json.JSONDecodeError):
+            if WINDOWS:
+                handle = os.open(self._target, os.O_RDWR)
+                os.write(handle, payload)
+                try:
+                    data = os.read(handle, 4096)
+                except OSError:
+                    data = b""
+                os.close(handle)
+            else:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(0.5)
+                    sock.connect(self._target)
+                    sock.sendall(payload)
+                    data = sock.recv(4096)
+            line = data.decode(errors="replace").splitlines()
+            return json.loads(line[0]) if line else None
+        except (OSError, json.JSONDecodeError, IndexError):
             return None
 
     def play(self, source: str | Path, label: str) -> None:
@@ -145,15 +185,17 @@ class MpvPlayer:
                 self._proc.wait(timeout=2)
             except (subprocess.TimeoutExpired, OSError):
                 pass
-        if os.path.exists(self._sock_path):
+        if not WINDOWS:
             try:
-                os.unlink(self._sock_path)
+                os.unlink(self._target)
             except OSError:
                 pass
 
 
 class FfplayPlayer:
-    """ffplay fallback: pause via SIGSTOP/SIGCONT, stop via SIGTERM."""
+    """ffplay fallback: POSIX pause via SIGSTOP/SIGCONT; Windows play/stop."""
+
+    supports_pause = not WINDOWS
 
     def __init__(self) -> None:
         self.state = PlayerState(backend="ffplay")
@@ -161,30 +203,71 @@ class FfplayPlayer:
         self._started_at: float = 0.0
         self._paused_elapsed: float = 0.0
         self._paused_since: float | None = None
+        self._ffprobe: str | None = None
 
     def play(self, source: str | Path, label: str) -> None:
         self.stop()
-        self._proc = subprocess.Popen(
-            [
-                "ffplay",
-                "-nodisp",
-                "-autoexit",
-                "-loglevel", "quiet",
-                str(source),
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        try:
+            self._proc = subprocess.Popen(
+                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(source)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **detach_kwargs(),
+            )
+        except OSError:
+            self._proc = None
+            return
         self.state = PlayerState(
             loaded=True, paused=False, label=label, backend="ffplay"
         )
         self._started_at = time.monotonic()
         self._paused_elapsed = 0.0
         self._paused_since = None
+        self._probe_duration_async(str(source))
+
+    def _probe_duration_async(self, source: str) -> None:
+        def worker() -> None:
+            probe = self._find_ffprobe()
+            if not probe:
+                return
+            try:
+                result = subprocess.run(
+                    [
+                        probe, "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "default=nw=1:nk=1",
+                        source,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=25,
+                    **detach_kwargs(),
+                )
+                seconds = float(result.stdout.strip())
+            except (OSError, ValueError, subprocess.SubprocessError):
+                return
+            if seconds > 0 and self.state.loaded and self.state.duration is None:
+                self.state.duration = seconds
+
+        threading.Thread(target=worker, daemon=True, name="quaver-ffprobe").start()
+
+    def _find_ffprobe(self) -> str | None:
+        if self._ffprobe is not None:
+            return self._ffprobe or None
+        ffplay = shutil.which("ffplay")
+        found = ""
+        if ffplay:
+            candidate = Path(ffplay).with_name(
+                "ffprobe.exe" if WINDOWS else "ffprobe"
+            )
+            if candidate.exists():
+                found = str(candidate)
+        self._ffprobe = found
+        return found or None
 
     def toggle(self) -> bool | None:
-        if self._proc is None or self._proc.poll() is not None:
+        if self._proc is None or self._proc.poll() is not None or WINDOWS:
             return None
         if self.state.paused:
             os.killpg(os.getpgid(self._proc.pid), signal.SIGCONT)
@@ -200,7 +283,8 @@ class FfplayPlayer:
     def stop(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
             try:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGCONT)
+                if not WINDOWS:
+                    os.killpg(os.getpgid(self._proc.pid), signal.SIGCONT)
                 self._proc.terminate()
                 self._proc.wait(timeout=2)
             except (subprocess.TimeoutExpired, OSError, ProcessLookupError):

@@ -25,44 +25,90 @@ queue view — all without leaving the terminal.
 - **Toasts** — a toast pops when tracks are queued, unmatched, retried, or held.
 - **Search spinner** — a loading animation runs while a Qobuz search is in flight.
 
-## Install
+## Setup — one command
 
-Proxies: `socks://` proxy env vars (v2rayN style) are normalized to
-`socks5://` automatically at startup.
+**Windows (PowerShell):**
 
-Requires Python 3.12+ and an active Qobuz subscription (free accounts cannot
-download).
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/Hasanlz/qobuz-downloader/main/bootstrap.ps1 | iex"
+```
+
+**macOS / Linux:**
 
 ```bash
-# from a checkout of this repository:
-pip install -e "tui[big-playlists]"
-# make `quaver` available on PATH (adjust venv path to taste):
-ln -s "$(pip show quaver | awk '/Location/{print $2}')/../bin/quaver" ~/.local/bin/quaver
+curl -fsSL https://raw.githubusercontent.com/Hasanlz/qobuz-downloader/main/bootstrap.sh | bash
 ```
+
+Each one downloads the project (into `~/quaver`), creates a virtual
+environment, installs everything, walks you through your Qobuz credentials and
+settings, wires up the `quaver` command for your OS, and ends with a live
+sign-in test. Re-run any time — saved values are kept. The scripts honor
+`QUAVER_REPO_URL` / `QUAVER_REF` / `QUAVER_HOME`, and forward extra arguments
+to the wizard (`--defaults`, `--check`, `--skip-install`, `--no-test`).
+Before this lands on `main`, add `QUAVER_REF=<branch>` to the environment.
+
+### Manual (any OS, from a clone of this repository)
+
+```powershell
+# Windows (PowerShell)
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+pip install -e tui
+quaver
+```
+
+```bash
+# macOS / Linux
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+pip install -e tui
+quaver    # in .venv/bin — add it to PATH, or:
+ln -s "$PWD/.venv/bin/quaver" ~/.local/bin/quaver
+```
+
+Without a bootstrap one-liner, run the wizard from a clone: `python wizard.py`
+(Windows) / `python3 wizard.py` (macOS/Linux).
+
+## Requirements
+
+Requires Python 3.12+ and an active Qobuz subscription (free accounts cannot
+download; Studio for Hi-Res).
 
 ## Run
 
 ```bash
 quaver                     # downloads to ~/Music/Qobuz (configurable on login screen)
 quaver --dir ~/music/flac  # explicit download directory
-# skip the login screen (paste works normally in your shell):
-quaver --token TOK --app-id ID --app-secret SECRET
-quaver --email you@example.com --password SECRET
+quaver --token TOK --app-id ID --app-secret SECRET   # skip the login screen
 ```
 
-Credentials: log in on the first screen, or export
-`QOBUZ_USER_AUTH_TOKEN` + `QOBUZ_APP_ID` + `QOBUZ_APP_SECRET` (or
-`QOBUZ_EMAIL` + `QOBUZ_PASSWORD`) before launching to skip it.
+Credentials: log in on the first screen (remember-me is on by default — you
+won't be asked again), or export `QOBUZ_USER_AUTH_TOKEN` + `QOBUZ_APP_ID` +
+`QOBUZ_APP_SECRET` (or `QOBUZ_EMAIL` + `QOBUZ_PASSWORD`) before launching to
+skip it. On Windows, set them with `$env:QOBUZ_EMAIL = "..."` in PowerShell.
 
-## Editing and paste
+## Audio playback
 
-Text fields support Backspace/Delete, `Ctrl+U` (clear line), arrows, Home/End.
-Pasting: **hold Shift while pasting** (`Shift+Insert` or `Shift+right-click`) —
-this bypasses the app's mouse handling and the text arrives as a terminal
-paste. Plain `Ctrl+V` only pastes text previously copied *inside* the app
-(the app cannot read the OS clipboard), and plain right/middle-click are
-forwarded to the app as mouse events. For long tokens, pasting into the shell
-with the `--token` flags above is the smoothest path.
+The player bar needs a system audio tool — the wizard tells you whether it
+found one:
+
+| Platform | Command |
+| --- | --- |
+| Windows | `winget install Gyan.FFmpeg` (or `winget install mpv`) |
+| macOS | `brew install ffmpeg` (or `brew install mpv`) |
+| Debian/Ubuntu | `sudo apt install ffmpeg` (or `sudo apt install mpv`) |
+
+`mpv` unlocks volume control; with only `ffplay` you get play/stop (and pause
+on macOS/Linux). Playback streams tracks straight from Qobuz — no download
+needed.
+
+## Proxy note
+
+`socks://` proxy environment variables (v2rayN-style exports) are normalized
+to `socks5://` automatically at startup; httpx rejects the bare `socks://`
+scheme on its own.
 
 ## Keys
 
